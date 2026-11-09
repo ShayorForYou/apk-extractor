@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launch window before Android 12: the app icon centred on the page colour. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/window_background" />
+    <item
+        android:width="112dp"
+        android:height="112dp"
+        android:drawable="@drawable/ic_launcher_legacy"
+        android:gravity="center" />
+</layer-list>

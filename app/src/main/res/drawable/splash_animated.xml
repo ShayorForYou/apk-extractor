@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Splash: the tray pops in, then the app tile rises out of it. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="108dp"
+            android:height="108dp"
+            android:viewportWidth="108"
+            android:viewportHeight="108">
+            <group android:name="tray" android:pivotX="54" android:pivotY="66" android:scaleX="0.6" android:scaleY="0.6">
+                <path
+                    android:name="trayPath"
+                    android:pathData="M33,57v7a10,10 0,0 0,10 10h22a10,10 0,0 0,10 -10v-7"
+                    android:strokeAlpha="0"
+                    android:strokeColor="#FFFFFFFF"
+                    android:strokeWidth="6.5"
+                    android:strokeLineCap="round"
+                    android:strokeLineJoin="round" />
+            </group>
+            <group android:name="lift" android:translateY="20">
+                <group android:pivotX="54" android:pivotY="40" android:rotation="-10">
+                    <path
+                        android:name="tile"
+                        android:fillAlpha="0"
+                        android:fillColor="#FFFFFFFF"
+                        android:pathData="M49,28h10a7,7 0,0 1,7 7v10a7,7 0,0 1,-7 7h-10a7,7 0,0 1,-7 -7v-10a7,7 0,0 1,7 -7z" />
+                    <path
+                        android:name="arrow"
+                        android:pathData="M54,46V35.5M49,40.5l5,-5l5,5"
+                        android:strokeAlpha="0"
+                        android:strokeColor="@color/ic_launcher_glyph"
+                        android:strokeWidth="3.4"
+                        android:strokeLineCap="round"
+                        android:strokeLineJoin="round" />
+                </group>
+            </group>
+        </vector>
+    </aapt:attr>
+
+    <target android:name="tray">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator android:duration="380" android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleX" android:valueFrom="0.6" android:valueTo="1" android:valueType="floatType" />
+                <objectAnimator android:duration="380" android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleY" android:valueFrom="0.6" android:valueTo="1" android:valueType="floatType" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="trayPath">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:duration="220" android:propertyName="strokeAlpha"
+                android:valueFrom="0" android:valueTo="1" android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+    <target android:name="lift">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:duration="520" android:startOffset="220"
+                android:interpolator="@android:interpolator/decelerate_cubic"
+                android:propertyName="translateY" android:valueFrom="20" android:valueTo="0" android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+    <target android:name="tile">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:duration="300" android:startOffset="220" android:propertyName="fillAlpha"
+                android:valueFrom="0" android:valueTo="1" android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+    <target android:name="arrow">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:duration="260" android:startOffset="460" android:propertyName="strokeAlpha"
+                android:valueFrom="0" android:valueTo="1" android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+</animated-vector>

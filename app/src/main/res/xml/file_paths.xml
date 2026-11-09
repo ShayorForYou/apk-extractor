@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Temporary copies created for the share sheet. -->
+    <cache-path name="share" path="share/" />
+    <!-- Download/APK Extractor on Android 9 and older (saved via the File API). -->
+    <external-path name="downloads" path="Download/" />
+</paths>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon layer: same silhouette, single colour, arrow cut out of the tile. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M33,57v7a10,10 0,0 0,10 10h22a10,10 0,0 0,10 -10v-7"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round" />
+    <group android:pivotX="54" android:pivotY="40" android:rotation="-10">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M49,28h10a7,7 0,0 1,7 7v10a7,7 0,0 1,-7 7h-10a7,7 0,0 1,-7 -7v-10a7,7 0,0 1,7 -7z
+                M52.3,46a1.7,1.7 0,0 0,3.4 0v-6.4l2.1,2.1a1.7,1.7 0,0 0,2.4 -2.4l-5,-5a1.7,1.7 0,0 0,-2.4 0l-5,5a1.7,1.7 0,0 0,2.4 2.4l2.1,-2.1z" />
+    </group>
+</vector>

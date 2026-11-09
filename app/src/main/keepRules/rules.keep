@@ -1,0 +1,25 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+#
+# For more details, see
+#   https://d.android.com/r/tools/r8/keep-rules
+
+# If your project uses WebView with JS, uncomment the following
+# and specify the fully qualified class name to the JavaScript interface
+# class:
+#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
+#   public *;
+#}
+# ARSCLib / apksig reference JDK-only and optional classes that don't exist on Android.
+-dontwarn com.reandroid.**
+-dontwarn com.android.apksig.**
+
+# apksig builds its ASN.1 / PKCS#7 structures via reflection on annotated fields;
+# without these, signing fails in minified builds ("Failed to sign using signer").
+-keepattributes RuntimeVisibleAnnotations,AnnotationDefault,Signature,InnerClasses,EnclosingMethod
+# Only the ASN.1 model classes are reflected on (fields read by annotation, no-arg constructors
+# called), so keep just those plus the annotations/enums — the rest of apksig can be shrunk.
+-keep @interface com.android.apksig.internal.asn1.** { *; }
+-keep enum com.android.apksig.internal.asn1.** { *; }
+-keep @com.android.apksig.internal.asn1.Asn1Class class * { *; }
+-keepclassmembers class * { @com.android.apksig.internal.asn1.Asn1Field *; }
