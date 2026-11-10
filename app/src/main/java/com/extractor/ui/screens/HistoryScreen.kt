@@ -47,6 +47,8 @@ import com.extractor.ui.components.PrimaryButton
 import com.extractor.ui.components.TonalIconButton
 import com.extractor.ui.components.relativeTime
 import com.extractor.ui.components.rememberFileSize
+import com.extractor.ui.components.FormatTag
+import com.extractor.ui.components.packageFormat
 
 @Composable
 fun HistoryScreen(vm: MainViewModel, contentPadding: PaddingValues, onBrowseApps: () -> Unit) {
@@ -153,12 +155,20 @@ private fun HistoryRow(
                     )
                     Spacer(Modifier.height(4.dp))
                     val size = rememberFileSize(entry.sizeBytes)
-                    Text(
-                        if (entry.sizeBytes > 0) "${relativeTime(entry.time)}  •  $size" else relativeTime(entry.time),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colors.onSurfaceVariant,
-                        maxLines = 1,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (entry.sizeBytes > 0) "${relativeTime(entry.time)}  •  $size" else relativeTime(entry.time),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        packageFormat(entry.fileName)?.let {
+                            Spacer(Modifier.width(8.dp))
+                            FormatTag(it)
+                        }
+                    }
                 }
                 Spacer(Modifier.width(8.dp))
                 TonalIconButton(Icons.Rounded.Share, "Share ${entry.fileName}", onClick = onShare, size = 40.dp)

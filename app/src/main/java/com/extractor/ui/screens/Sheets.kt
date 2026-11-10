@@ -80,6 +80,8 @@ import com.extractor.ui.components.SecondaryButton
 import com.extractor.ui.components.TonalIconButton
 import com.extractor.ui.components.rememberFileSize
 import com.extractor.ui.components.versionLabel
+import com.extractor.ui.components.FormatTag
+import com.extractor.ui.components.packageFormat
 import java.text.DateFormat
 import java.util.Date
 
@@ -136,6 +138,11 @@ fun AppDetailsSheet(
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.onSurfaceVariant,
                         maxLines = 1,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    FormatTag(
+                        packageFormat(app),
+                        detail = if (app.isSplit) "${app.splitSourceDirs.size + 1} PARTS" else null,
                     )
                 }
             }

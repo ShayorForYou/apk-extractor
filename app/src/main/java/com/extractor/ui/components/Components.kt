@@ -93,6 +93,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -114,6 +117,58 @@ fun versionLabel(app: AppInfo): String = versionLabel(app.displayVersion)
 
 fun versionLabel(version: String): String =
     if (version.startsWith("v", ignoreCase = true)) version else "v$version"
+
+// -------------------------------------------------------------------------------------------------
+// Format tags
+// -------------------------------------------------------------------------------------------------
+
+/** What a package or file is, as shown by [FormatTag]. [accent] marks the multi-file formats. */
+@Immutable
+data class PackageFormat(val tag: String, val description: String, val accent: Boolean)
+
+/** An installed app: one APK, or a base APK plus split APKs. */
+fun packageFormat(app: AppInfo): PackageFormat {
+    val parts = app.splitSourceDirs.size + 1
+    return if (app.isSplit) PackageFormat("SPLIT", "Split APK, $parts parts", accent = true)
+    else PackageFormat("APK", "Single APK", accent = false)
+}
+
+/** A saved file, by extension; null when it isn't an app package. */
+fun packageFormat(fileName: String): PackageFormat? =
+    when (val ext = fileName.substringAfterLast('.', "").lowercase()) {
+        "apk" -> PackageFormat("APK", "APK file", accent = false)
+        "apks", "xapk", "apkm" -> PackageFormat(ext.uppercase(), "${ext.uppercase()} bundle", accent = true)
+        else -> null
+    }
+
+/**
+ * A small, tracked uppercase tag (APK, SPLIT, APKS…). Neutral for plain APKs, softly tinted with the
+ * accent for split apps and bundles, so the two read apart at a glance without shouting.
+ */
+@Composable
+fun FormatTag(format: PackageFormat, modifier: Modifier = Modifier, detail: String? = null) {
+    val colors = MaterialTheme.colorScheme
+    val tint = if (format.accent) colors.primary else colors.onSurfaceVariant
+    Text(
+        if (detail != null) "${format.tag}  ·  $detail" else format.tag,
+        style = MaterialTheme.typography.labelSmall.merge(TagStyle),
+        color = tint,
+        maxLines = 1,
+        modifier = modifier
+            .semantics { contentDescription = format.description }
+            .clip(TagShape)
+            .background(tint.copy(alpha = if (format.accent) 0.12f else 0.09f))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    )
+}
+
+private val TagShape = RoundedCornerShape(6.dp)
+private val TagStyle = TextStyle(
+    fontSize = 10.sp,
+    lineHeight = 12.sp,
+    fontWeight = FontWeight.SemiBold,
+    letterSpacing = 0.8.sp,
+)
 
 fun relativeTime(time: Long): String {
     val now = System.currentTimeMillis()

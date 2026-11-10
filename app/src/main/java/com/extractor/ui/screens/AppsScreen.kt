@@ -103,6 +103,8 @@ import com.extractor.ui.components.SquareButton
 import com.extractor.ui.components.TonalIconButton
 import com.extractor.ui.components.rememberFileSize
 import com.extractor.ui.components.versionLabel
+import com.extractor.ui.components.FormatTag
+import com.extractor.ui.components.packageFormat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -494,12 +496,18 @@ private fun AppRow(
         Column(Modifier.weight(1f)) {
             Text(app.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(2.dp))
-            Text(
-                "${versionLabel(app).take(18)}  ·  ${rememberFileSize(app.sizeBytes)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.onSurfaceVariant,
-                maxLines = 1,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${versionLabel(app).take(18)}  ·  ${rememberFileSize(app.sizeBytes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(8.dp))
+                FormatTag(packageFormat(app))
+            }
         }
         Spacer(Modifier.width(8.dp))
         if (selectionMode) {

@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.util.Log
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -228,7 +229,10 @@ class ApkExporter(context: Context) {
         } catch (e: Throwable) {
             throw when (e) {
                 is CancellationException, is ExportException -> e
-                else -> ExportException(describe(e), e)
+                else -> {
+                    Log.w(TAG, "Export to ${dest.javaClass.simpleName} failed", e)
+                    ExportException(describe(e), e)
+                }
             }
         } finally {
             if (!committed) withContext(NonCancellable) { runCatching { dest.discard() } }
@@ -478,6 +482,7 @@ class ApkExporter(context: Context) {
         const val CANT_SAVE = "Couldn't save the file"
         const val NO_SPACE = "Not enough storage space"
 
+        private const val TAG = "ApkExporter"
         private const val BUFFER_SIZE = 256 * 1024
         private const val CHANNEL_CHUNK = 8L * 1024 * 1024
         private const val SPACE_MARGIN = 16L * 1024 * 1024

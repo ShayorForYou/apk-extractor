@@ -1,3 +1,7 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -110,4 +114,58 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
+}
+// ---- ARSCLib framework stubs ----------------------------------------------------------------
+// ARSCLib ships its own copies of android.content.res.XmlResourceParser, android.util.AttributeSet
+// and org.xmlpull.v1.* so it can run on a plain JVM. On Android they shadow the framework types: R8's whole-program
+// optimization treats them as app classes, finds nothing in the app that implements them, and
+// "proves" every XmlResourceParser is null. It then replaced the result of PackageManager.getXml /
+// loadXmlMetaData with null, which broke FileProvider (and so Share) in release builds only.
+// Strip the stubs from the jar so R8 sees the real framework classes.
+val androidStubsStripped = Attribute.of("com.extractor.androidStubsStripped", Boolean::class.javaObjectType)
+
+abstract class StripAndroidStubs : TransformAction<TransformParameters.None> {
+    private companion object {
+        /** Packages the Android framework already provides (the device's copies always win at runtime). */
+        val FRAMEWORK_PREFIXES = listOf("android/", "org/xmlpull/")
+    }
+
+    @get:InputArtifact
+    abstract val inputArtifact: Provider<FileSystemLocation>
+
+    override fun transform(outputs: TransformOutputs) {
+        val input = inputArtifact.get().asFile
+        if (!input.name.startsWith("ARSCLib-")) {
+            outputs.file(input)
+            return
+        }
+        val output = outputs.file("${input.nameWithoutExtension}-no-android-stubs.jar")
+        ZipInputStream(input.inputStream().buffered()).use { zin ->
+            ZipOutputStream(output.outputStream().buffered()).use { zout ->
+                while (true) {
+                    val entry = zin.nextEntry ?: break
+                    if (FRAMEWORK_PREFIXES.any(entry.name::startsWith)) continue
+                    zout.putNextEntry(ZipEntry(entry.name).apply { time = entry.time })
+                    zin.copyTo(zout)
+                    zout.closeEntry()
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    attributesSchema { attribute(androidStubsStripped) }
+    artifactTypes.getByName("jar") { attributes.attribute(androidStubsStripped, false) }
+    registerTransform(StripAndroidStubs::class) {
+        from.attribute(androidStubsStripped, false).attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, "jar")
+        to.attribute(androidStubsStripped, true).attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, "jar")
+    }
+}
+
+// App variants only: JVM unit tests have no Android framework and need ARSCLib's own copies.
+configurations.configureEach {
+    if (isCanBeResolved && "Test" !in name && (name.endsWith("RuntimeClasspath") || name.endsWith("CompileClasspath"))) {
+        attributes.attribute(androidStubsStripped, true)
+    }
 }

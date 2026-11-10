@@ -81,6 +81,8 @@ import com.extractor.ui.components.pressScale
 import com.extractor.ui.components.relativeTime
 import com.extractor.ui.components.rememberFileSize
 import com.extractor.ui.components.versionLabel
+import com.extractor.ui.components.FormatTag
+import com.extractor.ui.components.packageFormat
 
 // -------------------------------------------------------------------------------------------------
 // Install tab
@@ -193,14 +195,21 @@ private fun BackupRow(entry: HistoryEntry, onInstall: () -> Unit, modifier: Modi
                 Text(entry.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(2.dp))
                 val size = rememberFileSize(entry.sizeBytes)
-                Text(
-                    if (entry.sizeBytes > 0) "${versionLabel(entry.versionName).take(16)}  ·  $size  ·  ${relativeTime(entry.time)}"
-                    else relativeTime(entry.time),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (entry.sizeBytes > 0) "${versionLabel(entry.versionName).take(16)}  ·  $size  ·  ${relativeTime(entry.time)}"
+                        else relativeTime(entry.time),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    packageFormat(entry.fileName)?.let {
+                        Spacer(Modifier.width(8.dp))
+                        FormatTag(it)
+                    }
+                }
             }
             Spacer(Modifier.width(8.dp))
             SmallPill("Install", onInstall)
