@@ -8,13 +8,13 @@ plugins {
 }
 
 android {
-    namespace = "com.extractor"
+    namespace = "com.shayor.apkextractor"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.extractor"
+        applicationId = "com.shayor.apkextractor"
         minSdk = 24
         targetSdk = 37
         versionCode = 1
@@ -122,7 +122,7 @@ dependencies {
 // "proves" every XmlResourceParser is null. It then replaced the result of PackageManager.getXml /
 // loadXmlMetaData with null, which broke FileProvider (and so Share) in release builds only.
 // Strip the stubs from the jar so R8 sees the real framework classes.
-val androidStubsStripped = Attribute.of("com.extractor.androidStubsStripped", Boolean::class.javaObjectType)
+val androidStubsStripped = Attribute.of("com.shayor.apkextractor.androidStubsStripped", Boolean::class.javaObjectType)
 
 abstract class StripAndroidStubs : TransformAction<TransformParameters.None> {
     private companion object {
