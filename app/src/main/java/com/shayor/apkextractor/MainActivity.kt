@@ -27,6 +27,7 @@ import com.shayor.apkextractor.data.ThemeMode
 import com.shayor.apkextractor.ui.ApkExtractorApp
 import com.shayor.apkextractor.ui.InstallViewModel
 import com.shayor.apkextractor.ui.MainViewModel
+import com.shayor.apkextractor.ui.Shortcut
 import com.shayor.apkextractor.ui.theme.ApkExtractorTheme
 import com.shayor.apkextractor.ui.theme.DarkWindowBackground
 import com.shayor.apkextractor.ui.theme.LightWindowBackground
@@ -105,6 +106,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncoming(intent: Intent?) {
+        Shortcut.of(intent?.action)?.let { vm.onShortcut(it); return }
         val uris = incomingUris(intent ?: return)
         if (uris.isNotEmpty()) installVm.openShared(uris)
     }

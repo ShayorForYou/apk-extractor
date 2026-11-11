@@ -68,6 +68,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Switch
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.runtime.produceState
+import com.shayor.apkextractor.data.AppDetails
+import com.shayor.apkextractor.data.AppDetailsLoader
 import com.shayor.apkextractor.data.AppInfo
 import com.shayor.apkextractor.data.SplitMode
 import com.shayor.apkextractor.ui.UiEvent
@@ -88,12 +95,15 @@ import java.util.Date
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    // Never taller than ~80% of the screen, so the sheet reads as a sheet over the app, not a new page;
+    // longer content scrolls inside it.
+    val maxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.8f
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-    ) { content() }
+    ) { Box(Modifier.heightIn(max = maxHeight)) { content() } }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -104,11 +114,18 @@ private fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
 fun AppDetailsSheet(
     app: AppInfo,
     splitMode: SplitMode,
+    autoBackup: Boolean,
+    saveLocation: String,
     onDismiss: () -> Unit,
     onExtract: (SplitMode) -> Unit,
     onShare: (SplitMode) -> Unit,
+    onAutoBackupChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
+    // Loaded when the sheet opens: too costly to read for every app in the list.
+    val details by produceState<AppDetails?>(null, app.packageName, app.lastUpdateTime) {
+        value = AppDetailsLoader.load(context, app)
+    }
     // Split apps can be saved either way; start from the default chosen in Settings.
     var format by rememberSaveable(app.packageName) {
         mutableStateOf(if (splitMode == SplitMode.BUNDLE) SplitMode.BUNDLE else SplitMode.MERGE)
@@ -147,6 +164,29 @@ fun AppDetailsSheet(
                 }
             }
 
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QuickAction(
+                    "Open",
+                    Icons.AutoMirrored.Rounded.OpenInNew,
+                    onClick = { launchIntent?.let { safeStart(context, it) } },
+                    enabled = launchIntent != null,
+                    modifier = Modifier.weight(1f),
+                )
+                QuickAction(
+                    "App info",
+                    Icons.Rounded.Info,
+                    onClick = {
+                        safeStart(
+                            context,
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.packageName, null)),
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                QuickAction("Store", Icons.Rounded.Shop, onClick = { openStore(context, app.packageName) }, modifier = Modifier.weight(1f))
+            }
+
             if (app.isSplit) {
                 Spacer(Modifier.height(22.dp))
                 FormatPicker(format, onSelect = { format = it })
@@ -159,45 +199,108 @@ fun AppDetailsSheet(
                     onClick = { onExtract(mode) },
                     modifier = Modifier.weight(1f),
                 )
-                TonalIconButton(Icons.Rounded.Share, "Share", onClick = { onShare(mode) }, size = 56.dp)
+                TonalIconButton(Icons.Rounded.Share, "Share", onClick = { onShare(mode) }, size = 48.dp)
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
             Panel(Modifier.fillMaxWidth()) {
-                Column {
-                    InfoRow("Package", app.packageName, onClick = { copyToClipboard(context, app.packageName) }) {
-                        Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = colors.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .toggleable(value = autoBackup, onValueChange = onAutoBackupChange, role = Role.Switch)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Auto-backup updates", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Save each new version to $saveLocation",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                        )
                     }
-                    InfoDivider()
-                    InfoRow("Installed", dateFormat.format(Date(app.firstInstallTime)))
-                    InfoDivider()
-                    InfoRow("Updated", dateFormat.format(Date(app.lastUpdateTime)))
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = autoBackup,
+                        onCheckedChange = null,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = colors.primary,
+                            checkedThumbColor = colors.onPrimary,
+                            uncheckedTrackColor = colors.surfaceContainerHigh,
+                            uncheckedBorderColor = colors.surfaceContainerHigh,
+                            uncheckedThumbColor = colors.onSurfaceVariant,
+                        ),
+                    )
                 }
             }
 
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionTile(
-                    "Open app",
-                    Icons.AutoMirrored.Rounded.OpenInNew,
-                    onClick = { launchIntent?.let { safeStart(context, it) } },
-                    modifier = Modifier.weight(1f),
-                    enabled = launchIntent != null,
-                )
-                ActionTile(
-                    "App info",
-                    Icons.Rounded.Info,
-                    onClick = {
-                        safeStart(
-                            context,
-                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.packageName, null)),
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                ActionTile("Store", Icons.Rounded.Shop, onClick = { openStore(context, app.packageName) }, modifier = Modifier.weight(1f))
+            Panel(Modifier.fillMaxWidth()) {
+                Column {
+                    InfoRow("Package", app.packageName, onClick = { copyToClipboard(context, "Package name", app.packageName) }) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = colors.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                    }
+                    InfoDivider()
+                    InfoRow("Version code", app.versionCode.toString())
+                    InfoDivider()
+                    InfoRow("Android", "${androidName(app.minSdk)}+  ·  targets ${androidName(app.targetSdk)}")
+                    InfoDivider()
+                    InfoRow("Installed", dateFormat.format(Date(app.firstInstallTime)))
+                    InfoDivider()
+                    InfoRow("Updated", dateFormat.format(Date(app.lastUpdateTime)))
+                    InfoDivider()
+                    InfoRow("Installed from", details?.let { it.installer ?: "Unknown" } ?: "…")
+                    InfoDivider()
+                    val signatures = details?.signatures.orEmpty()
+                    val signature = signatures.firstOrNull()
+                    InfoRow(
+                        "Signature",
+                        when {
+                            details == null -> "…"
+                            signature == null -> "Unknown"
+                            else -> "SHA-256 ${signature.take(11)}…${signature.takeLast(5)}"
+                        },
+                        onClick = if (signature != null) {
+                            { copyToClipboard(context, "Signature", signatures.joinToString("\n")) }
+                        } else {
+                            null
+                        },
+                    ) {
+                        if (signature != null) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = colors.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+/** A small tonal pill (icon + label) for the secondary links in the details sheet. */
+@Composable
+private fun QuickAction(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val colors = MaterialTheme.colorScheme
+    val tint = if (enabled) colors.onSurface else colors.onSurface.copy(alpha = 0.38f)
+    Row(
+        modifier
+            .height(38.dp)
+            .clip(CircleShape)
+            .background(colors.surfaceContainerHigh)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = if (enabled) colors.primary else tint, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge, color = tint, maxLines = 1)
     }
 }
 
@@ -211,11 +314,12 @@ private fun InfoRow(
     label: String,
     value: String,
     onClick: (() -> Unit)? = null,
+    maxLines: Int = 1,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val base = Modifier.fillMaxWidth()
     Row(
-        (if (onClick != null) base.clickable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 14.dp),
+        (if (onClick != null) base.clickable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -224,7 +328,7 @@ private fun InfoRow(
             value,
             style = MaterialTheme.typography.titleSmall,
             textAlign = TextAlign.End,
-            maxLines = 1,
+            maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
@@ -456,7 +560,7 @@ fun ExtractResultSheet(
             if (ok) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     PrimaryButton("Open folder", onClick = onOpenFolder, modifier = Modifier.weight(1f))
-                    TonalIconButton(Icons.Rounded.Share, "Share", onClick = onShare, size = 56.dp)
+                    TonalIconButton(Icons.Rounded.Share, "Share", onClick = onShare, size = 48.dp)
                 }
             } else {
                 SecondaryButton("Close", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
@@ -488,9 +592,9 @@ private fun openStore(context: Context, pkg: String) {
     }
 }
 
-private fun copyToClipboard(context: Context, text: String) {
+private fun copyToClipboard(context: Context, label: String, text: String) {
     val cm = context.getSystemService(ClipboardManager::class.java) ?: return
-    cm.setPrimaryClip(ClipData.newPlainText("Package name", text))
+    cm.setPrimaryClip(ClipData.newPlainText(label, text))
     // Android 13+ shows its own confirmation.
     if (Build.VERSION.SDK_INT < 33) Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
 }

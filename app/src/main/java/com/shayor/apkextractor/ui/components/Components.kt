@@ -49,7 +49,14 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.animation.core.Animatable
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarData
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarVisuals
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -281,8 +288,8 @@ fun Modifier.pressScale(source: MutableInteractionSource, pressed: Float = 0.97f
 }
 
 /**
- * Main action: a solid accent pill. The icon sits in its own soft circle at the leading edge,
- * which gives the button a clear focal point without gradients or shadows.
+ * Main action: a slim, solid accent pill with an optional inline icon. Compact, but the filled
+ * accent makes it the first thing the eye lands on.
  */
 @Composable
 fun PrimaryButton(
@@ -290,7 +297,7 @@ fun PrimaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    height: Dp = 56.dp,
+    height: Dp = 48.dp,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
@@ -306,42 +313,31 @@ fun PrimaryButton(
                 role = Role.Button,
                 onClick = onClick,
             )
-            .padding(horizontal = if (icon != null) 8.dp else 26.dp),
+            .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        val badge = height - 16.dp
         if (icon != null) {
-            // Icon anchored at the leading edge in its own soft circle…
-            Box(
-                Modifier
-                    .size(badge)
-                    .clip(CircleShape)
-                    .background(colors.onPrimary.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center,
-            ) { Icon(icon, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(20.dp)) }
+            Icon(icon, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
         }
-        // …label centred in the remaining space, balanced by an equal trailing gap.
         Text(
             text,
-            style = MaterialTheme.typography.titleSmall.copy(letterSpacing = 0.1.sp),
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp),
             color = colors.onPrimary,
             maxLines = 1,
-            textAlign = TextAlign.Center,
-            modifier = if (icon != null) Modifier.weight(1f).padding(horizontal = 8.dp) else Modifier,
         )
-        if (icon != null) Spacer(Modifier.width(badge))
     }
 }
 
-/** Quiet action (Cancel / Close): a soft tonal pill in the accent family. */
+/** Quiet action (Cancel / Close): a soft accent-tinted pill, same size as [PrimaryButton]. */
 @Composable
 fun SecondaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    height: Dp = 56.dp,
+    height: Dp = 48.dp,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
@@ -350,42 +346,50 @@ fun SecondaryButton(
             .height(height)
             .pressScale(source)
             .clip(CircleShape)
-            .background(colors.primaryContainer)
+            .background(colors.primary.copy(alpha = 0.10f))
             .clickable(
                 interactionSource = source,
                 indication = ripple(color = colors.primary),
                 role = Role.Button,
                 onClick = onClick,
             )
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = colors.onPrimaryContainer, modifier = Modifier.size(19.dp))
-            Spacer(Modifier.width(10.dp))
+            Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
         }
-        Text(text, style = MaterialTheme.typography.titleSmall, color = colors.onPrimaryContainer, maxLines = 1)
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp),
+            color = colors.primary,
+            maxLines = 1,
+        )
     }
 }
 
-/** Round tonal icon button (download, share, open folder…), with the same press feedback. */
+/**
+ * Round icon button (download, share, open folder…): a small circle with a soft accent tint and an
+ * accent icon. Minimal, yet the colour makes it easy to spot on a row.
+ */
 @Composable
 fun TonalIconButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    size: Dp = 42.dp,
+    size: Dp = 36.dp,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
     Box(
         modifier
             .size(size)
-            .pressScale(source, pressed = 0.9f)
+            .pressScale(source, pressed = 0.88f)
             .clip(CircleShape)
-            .background(colors.primaryContainer)
+            .background(colors.primary.copy(alpha = 0.12f))
             .clickable(
                 interactionSource = source,
                 indication = ripple(color = colors.primary),
@@ -395,7 +399,7 @@ fun TonalIconButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = contentDescription, tint = colors.primary, modifier = Modifier.size(size * 0.48f))
+        Icon(icon, contentDescription = contentDescription, tint = colors.primary, modifier = Modifier.size(size * 0.5f))
     }
 }
 
@@ -440,9 +444,81 @@ fun ActionTile(
     }
 }
 
+/** Snackbar content for an undoable action; [durationMs] drives the draining progress bar. */
+class UndoVisuals(override val message: String, val durationMs: Long) : SnackbarVisuals {
+    override val actionLabel: String = "Undo"
+    override val withDismissAction: Boolean = false
+    override val duration: SnackbarDuration = SnackbarDuration.Indefinite // timed by the caller
+}
+
+/**
+ * A clean card: message, an "Undo" pill, and a hairline bar along the bottom that drains over the
+ * time left to undo. Only the bar animates (draw phase), so it costs next to nothing.
+ */
+@Composable
+private fun UndoSnackbar(data: SnackbarData, visuals: UndoVisuals) {
+    val colors = MaterialTheme.colorScheme
+    val remaining = remember(data) { Animatable(1f) }
+    LaunchedEffect(data) {
+        remaining.animateTo(0f, tween(visuals.durationMs.toInt(), easing = LinearEasing))
+    }
+    val accent = colors.inversePrimary
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = colors.inverseSurface,
+        contentColor = colors.inverseOnSurface,
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth(),
+    ) {
+        Column {
+            Row(
+                Modifier.padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    visuals.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                Row(
+                    Modifier
+                        .height(36.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.16f))
+                        .clickable(role = Role.Button, onClick = data::performAction)
+                        .padding(start = 12.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = null, tint = accent, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Undo", style = MaterialTheme.typography.labelLarge, color = accent)
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(colors.inverseOnSurface.copy(alpha = 0.10f))
+                    .drawBehind {
+                        drawRect(accent, size = Size(size.width * remaining.value, size.height))
+                    },
+            )
+        }
+    }
+}
+
 @Composable
 fun AppSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
     SnackbarHost(state, modifier) { data ->
+        val undo = data.visuals as? UndoVisuals
+        if (undo != null) {
+            UndoSnackbar(data, undo)
+            return@SnackbarHost
+        }
         Snackbar(
             snackbarData = data,
             shape = RoundedCornerShape(16.dp),

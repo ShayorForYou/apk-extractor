@@ -59,6 +59,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -83,10 +84,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.shayor.apkextractor.data.ApkExporter
 import com.shayor.apkextractor.data.SplitMode
 import com.shayor.apkextractor.ui.components.AppLogo
 import com.shayor.apkextractor.ui.components.AppSnackbarHost
+import com.shayor.apkextractor.ui.components.UndoVisuals
+import androidx.compose.ui.platform.LocalAccessibilityManager
+import kotlinx.coroutines.delay
 import com.shayor.apkextractor.ui.components.Panel
 import com.shayor.apkextractor.ui.screens.AppDetailsSheet
 import com.shayor.apkextractor.ui.screens.AppsScreen
@@ -97,6 +103,9 @@ import com.shayor.apkextractor.ui.screens.InstallSheet
 import com.shayor.apkextractor.ui.screens.SettingsScreen
 import com.shayor.apkextractor.ui.screens.TaskProgressDialog
 import kotlinx.coroutines.launch
+
+/** How long a removal can be undone (before accessibility adjustments). */
+private const val UNDO_WINDOW_MS = 6_000L
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     APPS("Apps", Icons.Rounded.GridView),
@@ -112,10 +121,12 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val colors = MaterialTheme.colorScheme
     val snackbar = remember { SnackbarHostState() }
+    val accessibility = LocalAccessibilityManager.current
     val task by vm.task.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
     val appsByPackage by vm.appsByPackage.collectAsStateWithLifecycle()
+    val autoBackupApps by vm.autoBackupApps.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.APPS) }
     var detailsPkg by rememberSaveable { mutableStateOf<String?>(null) }
@@ -153,6 +164,20 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
             }
         }
     }
+    // Launcher shortcuts: "Install APK" opens the file picker, "Back up all apps" shows the
+    // selection of every installed app (the ViewModel selects them) so one tap extracts them.
+    val shortcut by vm.shortcut.collectAsStateWithLifecycle()
+    LaunchedEffect(shortcut) {
+        when (shortcut ?: return@LaunchedEffect) {
+            Shortcut.INSTALL -> {
+                pager.scrollToPage(Tab.INSTALL.ordinal)
+                lifecycleOwner.lifecycle.withResumed { pickFile() }
+            }
+            Shortcut.BACKUP_ALL -> pager.scrollToPage(Tab.APPS.ordinal)
+        }
+        vm.consumeShortcut()
+    }
+
     // Back from Settings (install permission) or an uninstall: refresh what we know.
     LaunchedEffect(installVm, lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) { installVm.refreshPermission() }
@@ -166,6 +191,24 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                     is UiEvent.Message -> {
                         snackbar.currentSnackbarData?.dismiss()
                         launch { snackbar.showSnackbar(event.text) }
+                    }
+
+                    is UiEvent.Undoable -> {
+                        snackbar.currentSnackbarData?.dismiss()
+                        // Longer with accessibility services on (e.g. TalkBack), as Android recommends.
+                        val timeout = accessibility?.calculateRecommendedTimeoutMillis(
+                            UNDO_WINDOW_MS, containsIcons = true, containsText = true, containsControls = true,
+                        ) ?: UNDO_WINDOW_MS
+                        val visuals = UndoVisuals(event.text, timeout)
+                        launch {
+                            val timer = launch {
+                                delay(timeout)
+                                if (snackbar.currentSnackbarData?.visuals === visuals) snackbar.currentSnackbarData?.dismiss()
+                            }
+                            val result = snackbar.showSnackbar(visuals)
+                            timer.cancel()
+                            if (result == SnackbarResult.ActionPerformed) event.undo()
+                        }
                     }
 
                     is UiEvent.Launch -> try {
@@ -233,10 +276,16 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                             vm = vm,
                             contentPadding = pagePadding,
                             onExtract = requestExtract,
+                            onShare = { pkg -> vm.share(listOf(pkg)) },
                             onOpenApp = { detailsPkg = it },
                         )
                         Tab.INSTALL -> InstallScreen(vm, installVm, pagePadding, onPickFile = pickFile)
-                        Tab.HISTORY -> HistoryScreen(vm, pagePadding, onBrowseApps = { goTo(Tab.APPS) })
+                        Tab.HISTORY -> HistoryScreen(
+                            vm,
+                            pagePadding,
+                            onBrowseApps = { goTo(Tab.APPS) },
+                            onInstall = installVm::open,
+                        )
                         Tab.SETTINGS -> SettingsScreen(vm, snackbar, pagePadding)
                     }
                 }
@@ -283,12 +332,15 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
             AppDetailsSheet(
                 app = app,
                 splitMode = settings.splitMode,
+                autoBackup = pkg in autoBackupApps,
+                saveLocation = settings.outputFolderName ?: ApkExporter.DEFAULT_LOCATION,
                 onDismiss = { detailsPkg = null },
                 onExtract = { mode -> extractWith(listOf(pkg), mode) },
                 onShare = { mode ->
                     detailsPkg = null
                     vm.share(listOf(pkg), mode)
                 },
+                onAutoBackupChange = { on -> vm.setAutoBackup(pkg, on) },
             )
         } else if (appsByPackage.isNotEmpty()) {
             LaunchedEffect(pkg) { detailsPkg = null } // uninstalled while open

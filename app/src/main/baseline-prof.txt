@@ -1,0 +1,10 @@
+# Baseline Profile: code that is compiled ahead of time at install, so the first launch and the
+# first scrolls don't run it interpreted (Compose and AndroidX ship their own profiles; this covers
+# the app's code and the coroutine machinery every screen uses). Installed by androidx.profileinstaller,
+# which Compose already brings in. The app is small, so all of its own code is included.
+HSPLcom/shayor/apkextractor/**->**(**)**
+Lcom/shayor/apkextractor/**;
+HSPLkotlinx/coroutines/**->**(**)**
+Lkotlinx/coroutines/**;
+HSPLkotlin/collections/**->**(**)**
+Lkotlin/collections/**;

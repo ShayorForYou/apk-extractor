@@ -1,11 +1,14 @@
 package com.shayor.apkextractor.data
 
 import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
@@ -31,8 +34,18 @@ data class HistoryEntry(
     val treeUri: String?,
     val sizeBytes: Long,
     val time: Long,
+    /** Saved by auto-backup rather than by the user. */
+    val auto: Boolean = false,
+    /** -1 for entries saved before version codes were recorded. */
+    val versionCode: Long = -1,
 ) {
     val file: ExportedFile get() = ExportedFile(Uri.parse(uri), fileName, mimeType, location)
+
+    /** Same app, same version, same kind of file (.apk / .apks): a copy of the same thing. */
+    fun isSameVersion(app: AppInfo, extension: String): Boolean =
+        packageName == app.packageName &&
+            fileName.substringAfterLast('.', "").equals(extension, ignoreCase = true) &&
+            if (versionCode >= 0) versionCode == app.versionCode else versionName == app.displayVersion
 }
 
 /**
@@ -45,24 +58,69 @@ class HistoryRepository private constructor(private val context: Context) {
     private val _entries = MutableStateFlow(read())
     val entries: StateFlow<List<HistoryEntry>> = _entries.asStateFlow()
 
-    suspend fun add(app: AppInfo, file: ExportedFile, treeUri: String?) {
-        val size = withContext(Dispatchers.IO) { querySize(file.uri) }
-        val entry = HistoryEntry(
-            id = System.nanoTime(),
-            label = app.label,
-            packageName = app.packageName,
-            versionName = app.displayVersion,
-            fileName = file.displayName,
-            uri = file.uri.toString(),
-            mimeType = file.mimeType,
-            location = file.location,
-            treeUri = treeUri,
-            sizeBytes = size,
-            time = System.currentTimeMillis(),
-        )
-        _entries.update { (listOf(entry) + it).take(MAX) }
-        write()
-    }
+    /**
+     * Records a newly saved [file]. A file saved earlier for the same app version and type is an
+     * identical copy, so it is deleted and dropped from the list, and the new file takes over its
+     * name (no "App (1).apk" pile-up). Returns the file as finally stored (it may have been renamed).
+     */
+    suspend fun add(app: AppInfo, file: ExportedFile, treeUri: String?, auto: Boolean = false): ExportedFile =
+        withContext(Dispatchers.IO) {
+            val extension = file.displayName.substringAfterLast('.', "")
+            val duplicates = _entries.value.filter { it.isSameVersion(app, extension) && it.uri != file.uri.toString() }
+            var stored = file
+            // Take over the plainest freed name ("App_v1.apk" rather than "App_v1 (1).apk").
+            val freedName = duplicates.filter { deleteFile(Uri.parse(it.uri)) }.minByOrNull { it.fileName.length }?.fileName
+            if (freedName != null && freedName != file.displayName) rename(file, freedName)?.let { stored = it }
+
+            val entry = HistoryEntry(
+                id = System.nanoTime(),
+                label = app.label,
+                packageName = app.packageName,
+                versionName = app.displayVersion,
+                fileName = stored.displayName,
+                uri = stored.uri.toString(),
+                mimeType = stored.mimeType,
+                location = stored.location,
+                treeUri = treeUri,
+                sizeBytes = querySize(stored.uri),
+                time = System.currentTimeMillis(),
+                auto = auto,
+                versionCode = app.versionCode,
+            )
+            val replaced = duplicates.mapTo(HashSet()) { it.id }
+            _entries.update { list -> (listOf(entry) + list.filterNot { it.id in replaced }).take(MAX) }
+            write()
+            stored
+        }
+
+    /** The saved file of exactly this app version and type, if there is one in the list. */
+    fun findSaved(app: AppInfo, extension: String): HistoryEntry? =
+        _entries.value.firstOrNull { it.isSameVersion(app, extension) }
+
+    /** Deletes a file this app saved; false if it is already gone or no longer ours to delete. */
+    private fun deleteFile(uri: Uri): Boolean = runCatching {
+        if (DocumentsContract.isDocumentUri(context, uri)) {
+            DocumentsContract.deleteDocument(context.contentResolver, uri)
+        } else {
+            context.contentResolver.delete(uri, null, null) > 0
+        }
+    }.onFailure { Log.w(TAG, "Couldn't delete duplicate $uri", it) }.getOrDefault(false)
+
+    /** Gives [file] the name [name]; null where the storage can't rename (then the new name is kept). */
+    private fun rename(file: ExportedFile, name: String): ExportedFile? = runCatching {
+        val resolver = context.contentResolver
+        when {
+            DocumentsContract.isDocumentUri(context, file.uri) ->
+                DocumentsContract.renameDocument(resolver, file.uri, name)?.let { file.copy(uri = it, displayName = name) }
+
+            file.uri.authority == MediaStore.AUTHORITY -> {
+                val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, name) }
+                if (resolver.update(file.uri, values, null, null) > 0) file.copy(displayName = name) else null
+            }
+
+            else -> null // FileProvider files (Android 9 and older) keep the name they were written with
+        }
+    }.getOrNull()
 
     fun remove(id: Long) {
         _entries.update { list -> list.filterNot { it.id == id } }
@@ -71,6 +129,19 @@ class HistoryRepository private constructor(private val context: Context) {
 
     fun clear() {
         _entries.value = emptyList()
+        write()
+    }
+
+    /** Puts back entries that were just removed (undo), in their original order by time. */
+    fun restore(restored: List<HistoryEntry>) {
+        if (restored.isEmpty()) return
+        // Fresh ids: the list remembers per-id row state (e.g. "swiped away"), which must not come back.
+        val base = System.nanoTime()
+        val revived = restored.mapIndexed { i, e -> e.copy(id = base + i) }
+        _entries.update { list ->
+            val present = list.mapTo(HashSet()) { it.uri }
+            (list + revived.filterNot { it.uri in present }).sortedByDescending { it.time }.take(MAX)
+        }
         write()
     }
 
@@ -104,6 +175,8 @@ class HistoryRepository private constructor(private val context: Context) {
                 treeUri = o.optString("tree").ifBlank { null },
                 sizeBytes = o.optLong("size"),
                 time = o.getLong("time"),
+                auto = o.optBoolean("auto"),
+                versionCode = o.optLong("code", -1),
             )
         }
     }.getOrDefault(emptyList())
@@ -123,15 +196,19 @@ class HistoryRepository private constructor(private val context: Context) {
                     .put("location", e.location)
                     .put("tree", e.treeUri ?: "")
                     .put("size", e.sizeBytes)
-                    .put("time", e.time),
+                    .put("time", e.time)
+                    .put("auto", e.auto)
+                    .put("code", e.versionCode),
             )
         }
         prefs.edit { putString(KEY, array.toString()) }
     }
 
     companion object {
+        private const val TAG = "History"
         private const val KEY = "entries"
-        private const val MAX = 100
+        // Room for several versions of each app (auto-backup keeps adding new ones).
+        private const val MAX = 200
 
         @Volatile
         private var instance: HistoryRepository? = null

@@ -1,6 +1,17 @@
 package com.shayor.apkextractor.ui.screens
 
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -78,33 +89,71 @@ fun TaskProgressDialog(task: TaskState.Running, onCancel: () -> Unit) {
                         )
                     }
                     AppIcon(task.currentPackage, task.currentIconKey, 64.dp)
+                    // Done: a check pops onto the ring before the share sheet / result appears.
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = task.finished,
+                        enter = scaleIn(spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium)) + fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(colors.surfaceContainerLow)
+                                .padding(3.dp)
+                                .clip(CircleShape)
+                                .background(colors.primary),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(18.dp))
+                        }
+                    }
                 }
                 Spacer(Modifier.height(20.dp))
+                val many = task.total > 1
                 Text(
-                    task.currentLabel,
+                    if (task.finished && many) "${task.savedCount} apps" else task.currentLabel,
                     style = MaterialTheme.typography.titleLarge,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(4.dp))
-                val verb = when {
-                    merging -> "Merging"
-                    task.kind == TaskKind.SHARE -> "Preparing"
-                    else -> "Extracting"
-                }
-                val status = buildString {
-                    append(verb)
-                    if (!merging) append(" · ${(progress * 100).toInt()}%")
-                    if (task.total > 1) append(" · ${task.index + 1} of ${task.total}")
+                val share = task.kind == TaskKind.SHARE
+                val status = when {
+                    task.finished && share -> "Ready to share"
+                    task.finished -> "Saved"
+                    else -> buildString {
+                        append(
+                            when {
+                                merging -> "Merging"
+                                share -> "Preparing"
+                                else -> "Extracting"
+                            },
+                        )
+                        if (!merging) append(" · ${(progress * 100).toInt()}%")
+                        if (many) append(" · ${task.index + 1} of ${task.total}")
+                    }
                 }
                 Text(
                     status,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = colors.onSurfaceVariant,
+                    color = if (task.finished) colors.primary else colors.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(24.dp))
-                SecondaryButton("Cancel", onClick = onCancel, modifier = Modifier.fillMaxWidth(), height = 48.dp)
+                if (task.finished) {
+                    // Same height as the button, so nothing jumps.
+                    Box(Modifier.fillMaxWidth().height(46.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            if (share) "Opening share options…" else "Almost done…",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colors.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    SecondaryButton("Cancel", onClick = onCancel, modifier = Modifier.fillMaxWidth(), height = 46.dp)
+                }
             }
         }
     }

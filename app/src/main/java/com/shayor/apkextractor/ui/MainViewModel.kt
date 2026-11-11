@@ -18,7 +18,9 @@ import com.shayor.apkextractor.data.ApkExporter
 import com.shayor.apkextractor.data.AppFilter
 import com.shayor.apkextractor.data.AppIcons
 import com.shayor.apkextractor.data.AppInfo
+import com.shayor.apkextractor.data.AppListCache
 import com.shayor.apkextractor.data.AppRepository
+import com.shayor.apkextractor.data.AutoBackup
 import com.shayor.apkextractor.data.ExportException
 import com.shayor.apkextractor.data.ExportedFile
 import com.shayor.apkextractor.data.HistoryEntry
@@ -31,7 +33,10 @@ import com.shayor.apkextractor.data.SplitMode
 import com.shayor.apkextractor.data.ThemeMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -63,9 +68,25 @@ data class ListState(
     val totalBytes: Long = 0,
     val userCount: Int = 0,
     val systemCount: Int = 0,
+    /** The (trimmed) search the list is filtered by, for highlighting matches. */
+    val query: String = "",
 )
 
+/** The filtered + sorted list before the search is applied; only rebuilt when apps or sorting change. */
+private class SortedApps(val all: List<AppInfo>, val visible: List<AppInfo>)
+
 enum class TaskKind { EXTRACT, SHARE }
+
+/** Long-press launcher shortcuts (res/xml/shortcuts.xml). */
+enum class Shortcut(val action: String) {
+    INSTALL("com.shayor.apkextractor.action.INSTALL"),
+    BACKUP_ALL("com.shayor.apkextractor.action.BACKUP_ALL"),
+    ;
+
+    companion object {
+        fun of(action: String?) = entries.firstOrNull { it.action == action }
+    }
+}
 
 @Immutable
 sealed interface TaskState {
@@ -82,6 +103,9 @@ sealed interface TaskState {
         val bytesTotal: Long,
         /** Non-null while a step without byte progress runs (e.g. merging split APKs). */
         val stage: String? = null,
+        /** All work is done; briefly shows a "ready" state before the share sheet / result appears. */
+        val finished: Boolean = false,
+        val savedCount: Int = 0,
     ) : TaskState {
         val progress: Float
             get() = if (bytesTotal <= 0) 0f else (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f)
@@ -94,6 +118,9 @@ data class SavedApp(val label: String, val packageName: String, val iconKey: Str
 
 sealed interface UiEvent {
     data class Message(val text: String) : UiEvent
+
+    /** A message with an "Undo" action that runs [undo] if tapped before the snackbar goes away. */
+    class Undoable(val text: String, val undo: () -> Unit) : UiEvent
     data class Launch(val intent: Intent) : UiEvent
 
     /** Tries each intent in order until one starts; shows [failMessage] if none can. */
@@ -112,8 +139,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val settingsRepo = SettingsRepository.get(app)
     private val repo = AppRepository(app)
+    private val cache = AppListCache(app)
     private val exporter = ApkExporter(app)
     private val historyRepo = HistoryRepository.get(app)
+    private val autoBackup = AutoBackup.get(app)
+
+    /** Apps that are saved automatically whenever they update. */
+    val autoBackupApps: StateFlow<Set<String>> = autoBackup.watched
 
     val history: StateFlow<List<HistoryEntry>> = historyRepo.entries
 
@@ -145,36 +177,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** True once the first screen can be drawn complete (apps loaded, first icons decoded). */
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
-    val listState: StateFlow<ListState> = combine(
+    /** Filter + sort, which is the costly part (collation); typing a search doesn't redo it. */
+    private val sortedApps = combine(
         allApps,
-        loadError,
-        query,
         settings.map { Triple(it.filter, it.sortBy, it.sortAscending) }.distinctUntilChanged(),
-    ) { apps, error, q, (filter, sortBy, ascending) ->
-        if (apps == null) return@combine ListState(loading = error == null, error = error)
-        val needle = q.trim()
-        val visible = apps.asSequence()
-            .filter {
+    ) { apps, (filter, sortBy, ascending) ->
+        apps?.let {
+            val visible = it.filter { app ->
                 when (filter) {
-                    AppFilter.USER -> !it.isSystem
-                    AppFilter.SYSTEM -> it.isSystem
+                    AppFilter.USER -> !app.isSystem
+                    AppFilter.SYSTEM -> app.isSystem
                     AppFilter.ALL -> true
                 }
+            }.sortedWith(comparator(sortBy, ascending))
+            SortedApps(it, visible)
+        }
+    }.flowOn(Dispatchers.Default)
+
+    /** Typing is debounced so a fast typist doesn't filter on every keystroke; clearing is instant. */
+    @OptIn(FlowPreview::class)
+    private val searchQuery = query
+        .debounce { if (it.isBlank()) 0L else SEARCH_DEBOUNCE_MS }
+        .map { it.trim() }
+        .distinctUntilChanged()
+
+    val listState: StateFlow<ListState> = combine(sortedApps, loadError, searchQuery) { sorted, error, needle ->
+        if (sorted == null) return@combine ListState(loading = error == null, error = error)
+        val visible = if (needle.isEmpty()) {
+            sorted.visible
+        } else {
+            sorted.visible.filter {
+                it.label.contains(needle, ignoreCase = true) || it.packageName.contains(needle, ignoreCase = true)
             }
-            .filter {
-                needle.isEmpty() ||
-                    it.label.contains(needle, ignoreCase = true) ||
-                    it.packageName.contains(needle, ignoreCase = true)
-            }
-            .sortedWith(comparator(sortBy, ascending))
-            .toList()
+        }
         ListState(
             loading = false,
             error = error,
             apps = visible,
             totalBytes = visible.sumOf { it.sizeBytes },
-            userCount = apps.count { !it.isSystem },
-            systemCount = apps.count { it.isSystem },
+            userCount = sorted.all.count { !it.isSystem },
+            systemCount = sorted.all.count { it.isSystem },
+            query = needle,
         )
     }
         .flowOn(Dispatchers.Default)
@@ -189,6 +232,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
             ) return
             viewModelScope.launch { refreshPackage(pkg) }
+            if (intent.action != Intent.ACTION_PACKAGE_REMOVED) autoBackup.onPackageChanged(pkg)
         }
     }
 
@@ -202,10 +246,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         ContextCompat.registerReceiver(app, packageReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
 
-        load()
+        load(fromCache = true)
         prepareFirstScreen()
         verifyOutputFolder()
         viewModelScope.launch { exporter.trimShareCache() }
+        autoBackup.schedule()
     }
 
     override fun onCleared() {
@@ -216,13 +261,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Loading
     // ---------------------------------------------------------------------------------------------
 
-    private fun load() = viewModelScope.launch {
+    /**
+     * [fromCache]: show the list saved by the previous launch straight away, then swap in the
+     * fresh one. Reading every app's label is the slow part of startup; the cache skips the wait.
+     */
+    private fun load(fromCache: Boolean = false) = viewModelScope.launch {
+        if (fromCache && allApps.value == null) {
+            cache.read()?.let { cached -> if (allApps.value == null) allApps.value = cached }
+        }
         try {
             val apps = repo.loadAll()
             allApps.value = apps
             loadError.value = null
             val installed = apps.mapTo(HashSet()) { it.packageName }
             _selection.update { it.filterTo(HashSet()) { p -> p in installed } }
+            cache.write(apps)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -270,6 +323,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         if (info == null) _selection.update { it - pkg }
+        allApps.value?.let { cache.write(it) }
     }
 
     val appsByPackage: StateFlow<Map<String, AppInfo>> = allApps
@@ -304,6 +358,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSelection() {
         _selection.value = emptySet()
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Launcher shortcuts
+    // ---------------------------------------------------------------------------------------------
+
+    private val _shortcut = MutableStateFlow<Shortcut?>(null)
+
+    /** A launcher shortcut the UI still has to act on (switch tab, open the file picker). */
+    val shortcut: StateFlow<Shortcut?> = _shortcut.asStateFlow()
+
+    fun onShortcut(shortcut: Shortcut) {
+        _shortcut.value = shortcut
+        if (shortcut == Shortcut.BACKUP_ALL) selectAllUserApps()
+    }
+
+    fun consumeShortcut() {
+        _shortcut.value = null
+    }
+
+    /** "Back up all apps" shortcut: selects every installed (non-system) app, ready to extract. */
+    private fun selectAllUserApps() = viewModelScope.launch {
+        settingsRepo.update { it.copy(filter = AppFilter.USER) }
+        val apps = allApps.first { it != null }.orEmpty()
+        _selection.value = apps.filterNot { it.isSystem }.mapTo(HashSet()) { it.packageName }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Auto-backup
+    // ---------------------------------------------------------------------------------------------
+
+    fun setAutoBackup(pkg: String, enabled: Boolean) {
+        autoBackup.set(pkg, enabled)
+        _events.trySend(
+            UiEvent.Message(
+                if (enabled) "Saving this version now, and every update from here on" else "Auto-backup turned off",
+            ),
+        )
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -346,6 +438,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var completed = 0L
         var lastEmit = 0L
 
+        val started = SystemClock.elapsedRealtime()
         taskJob = viewModelScope.launch {
             val saved = mutableListOf<ExportedFile>()
             val savedApps = mutableListOf<SavedApp>()
@@ -373,7 +466,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val file = if (shareDir != null) {
                             exporter.exportForShare(app, settings, shareDir, onStage, onProgress)
                         } else {
-                            exporter.exportToStorage(app, settings, onStage, onProgress).also {
+                            // History swaps out an identical earlier copy and may rename the file.
+                            exporter.exportToStorage(app, settings, onStage, onProgress).let {
                                 historyRepo.add(app, it, settings.outputTreeUri)
                             }
                         }
@@ -391,6 +485,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     completed += estimateOf(app)
                     done.set(completed)
                 }
+                if (saved.isNotEmpty()) showFinished(saved.size, started)
                 report(kind, saved, savedApps, failures, settings)
             } catch (e: CancellationException) {
                 _events.trySend(
@@ -404,6 +499,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 taskJob = null
             }
         }
+    }
+
+    /**
+     * Small apps copy in a few milliseconds, so the progress dialog used to flash and the share sheet
+     * popped up as if by accident. Fill the ring, show a check for a moment, and keep the whole dialog
+     * up long enough to be read, so the result clearly follows from the tap.
+     */
+    private suspend fun showFinished(savedCount: Int, started: Long) {
+        _task.update { s ->
+            if (s is TaskState.Running) {
+                val total = s.bytesTotal.coerceAtLeast(1)
+                s.copy(bytesDone = total, bytesTotal = total, stage = null, finished = true, savedCount = savedCount)
+            } else {
+                s
+            }
+        }
+        val elapsed = SystemClock.elapsedRealtime() - started
+        delay(maxOf(DONE_HOLD_MS, MIN_DIALOG_MS - elapsed))
     }
 
     private fun report(
@@ -451,9 +564,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _events.trySend(UiEvent.Message("That file was moved or deleted"))
     }
 
-    fun removeHistory(entry: HistoryEntry) = historyRepo.remove(entry.id)
+    /** Removes an entry (the file itself stays on disk); it can be put back from the snackbar. */
+    fun removeHistory(entry: HistoryEntry) {
+        historyRepo.remove(entry.id)
+        _events.trySend(UiEvent.Undoable("Removed ${entry.label} from history") { historyRepo.restore(listOf(entry)) })
+    }
 
-    fun clearHistory() = historyRepo.clear()
+    fun clearHistory() {
+        val removed = history.value
+        if (removed.isEmpty()) return
+        historyRepo.clear()
+        _events.trySend(UiEvent.Undoable("History cleared") { historyRepo.restore(removed) })
+    }
 
     // ---------------------------------------------------------------------------------------------
     // Settings
@@ -524,6 +646,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val PROGRESS_INTERVAL_MS = 33L
+        const val SEARCH_DEBOUNCE_MS = 120L
+        const val DONE_HOLD_MS = 450L
+        const val MIN_DIALOG_MS = 900L
         const val FIRST_SCREEN_BUDGET_MS = 1_200L
         const val FIRST_SCREEN_ICONS = 14
         const val ROW_ICON_DP = 46f // matches the list row icon size

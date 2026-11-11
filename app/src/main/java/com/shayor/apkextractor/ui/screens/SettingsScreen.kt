@@ -27,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Contrast
@@ -80,6 +81,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(vm: MainViewModel, snackbar: SnackbarHostState, contentPadding: PaddingValues) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val cacheBytes by vm.shareCacheBytes.collectAsStateWithLifecycle()
+    val autoBackupApps by vm.autoBackupApps.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val colors = MaterialTheme.colorScheme
 
@@ -146,6 +148,18 @@ fun SettingsScreen(vm: MainViewModel, snackbar: SnackbarHostState, contentPaddin
                     "File name",
                     exampleName(settings.nameFormat),
                     onClick = { picker = "name" },
+                )
+                RowDivider()
+                NavRow(
+                    Icons.Rounded.Autorenew,
+                    "Auto-backup",
+                    when (autoBackupApps.size) {
+                        0 -> "Off. Turn it on for an app in its details"
+                        1 -> "1 app is saved whenever it updates"
+                        else -> "${autoBackupApps.size} apps are saved whenever they update"
+                    },
+                    onClick = null,
+                    showChevron = false,
                 )
             }
 
