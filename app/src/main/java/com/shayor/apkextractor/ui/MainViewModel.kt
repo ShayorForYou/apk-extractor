@@ -16,12 +16,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.shayor.apkextractor.data.ApkExporter
 import com.shayor.apkextractor.data.AppFilter
+import com.shayor.apkextractor.data.PackageType
 import com.shayor.apkextractor.data.AppIcons
 import com.shayor.apkextractor.data.AppInfo
 import com.shayor.apkextractor.data.AppListCache
 import com.shayor.apkextractor.data.AppRepository
 import com.shayor.apkextractor.data.AutoBackup
 import com.shayor.apkextractor.data.ExportException
+import com.shayor.apkextractor.data.ExportStage
 import com.shayor.apkextractor.data.ExportedFile
 import com.shayor.apkextractor.data.HistoryEntry
 import com.shayor.apkextractor.data.HistoryRepository
@@ -102,7 +104,9 @@ sealed interface TaskState {
         val bytesDone: Long,
         val bytesTotal: Long,
         /** Non-null while a step without byte progress runs (e.g. merging split APKs). */
-        val stage: String? = null,
+        val stage: ExportStage? = null,
+        /** [SystemClock.elapsedRealtime] when the whole task started; drives the time-left estimate. */
+        val startedAt: Long = 0L,
         /** All work is done; briefly shows a "ready" state before the share sheet / result appears. */
         val finished: Boolean = false,
         val savedCount: Int = 0,
@@ -180,14 +184,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Filter + sort, which is the costly part (collation); typing a search doesn't redo it. */
     private val sortedApps = combine(
         allApps,
-        settings.map { Triple(it.filter, it.sortBy, it.sortAscending) }.distinctUntilChanged(),
-    ) { apps, (filter, sortBy, ascending) ->
+        settings.map { ListOptions(it.filter, it.packageType, it.sortBy, it.sortAscending) }.distinctUntilChanged(),
+    ) { apps, (filter, type, sortBy, ascending) ->
         apps?.let {
             val visible = it.filter { app ->
-                when (filter) {
+                val owner = when (filter) {
                     AppFilter.USER -> !app.isSystem
                     AppFilter.SYSTEM -> app.isSystem
                     AppFilter.ALL -> true
+                }
+                owner && when (type) {
+                    PackageType.ALL -> true
+                    PackageType.SPLIT -> app.isSplit
+                    PackageType.SINGLE -> !app.isSplit
                 }
             }.sortedWith(comparator(sortBy, ascending))
             SortedApps(it, visible)
@@ -341,6 +350,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setFilter(filter: AppFilter) = settingsRepo.update { it.copy(filter = filter) }
 
+    fun setPackageType(type: PackageType) = settingsRepo.update { it.copy(packageType = type) }
+
     fun setSort(sortBy: SortBy) = settingsRepo.update {
         // Tapping the active sort flips its direction.
         if (it.sortBy == sortBy) it.copy(sortAscending = !it.sortAscending)
@@ -380,7 +391,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** "Back up all apps" shortcut: selects every installed (non-system) app, ready to extract. */
     private fun selectAllUserApps() = viewModelScope.launch {
-        settingsRepo.update { it.copy(filter = AppFilter.USER) }
+        settingsRepo.update { it.copy(filter = AppFilter.USER, packageType = PackageType.ALL) }
         val apps = allApps.first { it != null }.orEmpty()
         _selection.value = apps.filterNot { it.isSystem }.mapTo(HashSet()) { it.packageName }
     }
@@ -448,6 +459,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 for ((index, app) in apps.withIndex()) {
                     _task.value = TaskState.Running(
                         kind, app.label, app.packageName, app.iconKey, index, apps.size, done.get(), estimate,
+                        startedAt = started,
                     )
                     val onProgress: (Long) -> Unit = { n ->
                         val total = done.addAndGet(n)
@@ -459,7 +471,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         }
                     }
-                    val onStage: (String?) -> Unit = { stage ->
+                    val onStage: (ExportStage?) -> Unit = { stage ->
                         _task.update { s -> if (s is TaskState.Running) s.copy(stage = stage) else s }
                     }
                     try {
@@ -527,7 +539,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         settings: Settings,
     ) {
         if (kind == TaskKind.SHARE) {
-            if (saved.isNotEmpty()) _events.trySend(UiEvent.Launch(exporter.shareIntent(saved)))
+            if (saved.isNotEmpty()) {
+                _events.trySend(UiEvent.Launch(exporter.shareIntent(saved)))
+                // Done with these apps, as after extracting. If nothing could be shared, the
+                // selection stays so the user can try again.
+                clearSelection()
+            }
             if (failures.isNotEmpty()) {
                 val text = if (failures.size == 1) failures[0].second else "Couldn't share ${failures.size} apps"
                 _events.trySend(UiEvent.Message(text))
@@ -668,3 +685,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 }
+
+/** What the app list is filtered and sorted by; a change re-filters and re-sorts the list. */
+private data class ListOptions(
+    val filter: AppFilter,
+    val type: PackageType,
+    val sortBy: com.shayor.apkextractor.data.SortBy,
+    val ascending: Boolean,
+)

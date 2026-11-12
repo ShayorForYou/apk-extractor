@@ -3,58 +3,53 @@ package com.shayor.apkextractor.ui.theme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
-import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.shayor.apkextractor.R
 
-@OptIn(ExperimentalTextApi::class)
-private fun jakarta(weight: Int) = Font(
-    R.font.plus_jakarta_sans,
-    FontWeight(weight),
-    variationSettings = FontVariation.Settings(FontVariation.weight(weight)),
+/*
+ * The iOS type ramp (Large Title 34, Title 1–3, Headline 17 semibold, Body 17, Subheadline 15,
+ * Footnote 13, Captions 12/11) on the system sans-serif, a neo-grotesque like SF Pro. Large sizes
+ * are tracked in slightly, as SF's display cut is.
+ */
+
+private val Base = TextStyle(
+    fontFamily = FontFamily.Default,
+    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
 )
 
-/** Plus Jakarta Sans (SIL Open Font License 1.1), bundled as a variable font. */
-val Jakarta = FontFamily(jakarta(400), jakarta(500), jakarta(600), jakarta(700), jakarta(800))
-
-private val base = Typography()
-
-private fun TextStyle.j(weight: FontWeight, size: Int? = null, tracking: Double = 0.0, line: Int? = null) = copy(
-    fontFamily = Jakarta,
+private fun ios(size: Int, line: Int, weight: FontWeight, tracking: Double = 0.0) = Base.copy(
+    fontSize = size.sp,
+    lineHeight = line.sp,
     fontWeight = weight,
-    fontSize = size?.sp ?: fontSize,
-    lineHeight = line?.sp ?: lineHeight,
     letterSpacing = tracking.sp,
 )
 
 val Typography = Typography(
-    displayLarge = base.displayLarge.j(FontWeight.ExtraBold, tracking = -1.5),
-    displayMedium = base.displayMedium.j(FontWeight.ExtraBold, tracking = -1.2),
-    displaySmall = base.displaySmall.j(FontWeight.ExtraBold, size = 38, tracking = -1.2, line = 42),
-    headlineLarge = base.headlineLarge.j(FontWeight.ExtraBold, size = 32, tracking = -1.0, line = 38),
-    headlineMedium = base.headlineMedium.j(FontWeight.ExtraBold, size = 28, tracking = -0.8),
-    headlineSmall = base.headlineSmall.j(FontWeight.Bold, size = 24, tracking = -0.5),
-    titleLarge = base.titleLarge.j(FontWeight.Bold, size = 20, tracking = -0.3),
-    titleMedium = base.titleMedium.j(FontWeight.Bold, size = 15, tracking = -0.1, line = 20),
-    titleSmall = base.titleSmall.j(FontWeight.SemiBold, size = 14),
-    bodyLarge = base.bodyLarge.j(FontWeight.Medium, size = 16),
-    bodyMedium = base.bodyMedium.j(FontWeight.Medium, size = 14),
-    bodySmall = base.bodySmall.j(FontWeight.Medium, size = 12, line = 16),
-    labelLarge = base.labelLarge.j(FontWeight.Bold, size = 14),
-    labelMedium = base.labelMedium.j(FontWeight.SemiBold, size = 12),
-    labelSmall = base.labelSmall.j(FontWeight.SemiBold, size = 11, tracking = 0.4),
+    displayLarge = ios(48, 54, FontWeight.Bold, -1.0),
+    displayMedium = ios(40, 46, FontWeight.Bold, -0.8),
+    displaySmall = ios(36, 42, FontWeight.Bold, -0.7),
+    headlineLarge = ios(34, 41, FontWeight.Bold, -0.6), // Large Title
+    headlineMedium = ios(28, 34, FontWeight.Bold, -0.4), // Title 1
+    headlineSmall = ios(22, 28, FontWeight.Bold, -0.3), // Title 2
+    titleLarge = ios(20, 25, FontWeight.SemiBold, -0.2), // Title 3
+    titleMedium = ios(17, 22, FontWeight.SemiBold, -0.2), // Headline
+    titleSmall = ios(15, 20, FontWeight.SemiBold, -0.1), // Subheadline, emphasized
+    bodyLarge = ios(17, 22, FontWeight.Normal, -0.2), // Body
+    bodyMedium = ios(15, 20, FontWeight.Normal, -0.1), // Subheadline
+    bodySmall = ios(13, 18, FontWeight.Normal), // Footnote
+    labelLarge = ios(15, 20, FontWeight.SemiBold, -0.1), // Buttons
+    labelMedium = ios(12, 16, FontWeight.Medium), // Caption 1
+    labelSmall = ios(11, 13, FontWeight.Medium, 0.1), // Caption 2
 )
 
 val Shapes = Shapes(
-    extraSmall = RoundedCornerShape(10.dp),
-    small = RoundedCornerShape(14.dp),
-    medium = RoundedCornerShape(20.dp),
-    large = RoundedCornerShape(28.dp),
-    extraLarge = RoundedCornerShape(32.dp),
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(26.dp),
+    extraLarge = RoundedCornerShape(34.dp),
 )

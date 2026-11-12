@@ -31,6 +31,13 @@ data class AppInfo(
 
 enum class AppFilter { USER, SYSTEM, ALL }
 
+/** Which kind of package the app list shows: everything, only split apps, or only single-APK apps. */
+enum class PackageType(val label: String, val description: String) {
+    ALL("All Types", "Every app"),
+    SPLIT("Split APKs", "Apps installed in several parts"),
+    SINGLE("Single APKs", "Apps installed as one file"),
+}
+
 enum class SortBy(val label: String) {
     NAME("Name"),
     SIZE("Size"),
@@ -62,6 +69,7 @@ data class Settings(
     val splitMode: SplitMode = SplitMode.MERGE,
     val nameFormat: NameFormat = NameFormat.LABEL_VERSION,
     val filter: AppFilter = AppFilter.USER,
+    val packageType: PackageType = PackageType.ALL,
     val sortBy: SortBy = SortBy.NAME,
     val sortAscending: Boolean = true,
     val showTips: Boolean = true,

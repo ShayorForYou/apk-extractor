@@ -32,6 +32,7 @@ class SettingsRepository private constructor(context: Context) {
         splitMode = enumOr(prefs.getString(K_SPLIT, null), SplitMode.MERGE),
         nameFormat = enumOr(prefs.getString(K_NAME, null), NameFormat.LABEL_VERSION),
         filter = enumOr(prefs.getString(K_FILTER, null), AppFilter.USER),
+        packageType = enumOr(prefs.getString(K_TYPE, null), PackageType.ALL),
         sortBy = enumOr(prefs.getString(K_SORT, null), SortBy.NAME),
         sortAscending = prefs.getBoolean(K_ASC, true),
         showTips = prefs.getBoolean(K_TIPS, true),
@@ -47,6 +48,7 @@ class SettingsRepository private constructor(context: Context) {
         putString(K_SPLIT, s.splitMode.name)
         putString(K_NAME, s.nameFormat.name)
         putString(K_FILTER, s.filter.name)
+        putString(K_TYPE, s.packageType.name)
         putString(K_SORT, s.sortBy.name)
         putBoolean(K_ASC, s.sortAscending)
         putBoolean(K_TIPS, s.showTips)
@@ -64,6 +66,7 @@ class SettingsRepository private constructor(context: Context) {
         private const val K_SPLIT = "split_mode_v2"
         private const val K_NAME = "name_format"
         private const val K_FILTER = "filter"
+        private const val K_TYPE = "package_type"
         private const val K_SORT = "sort"
         private const val K_ASC = "sort_asc"
         private const val K_TIPS = "show_tips"

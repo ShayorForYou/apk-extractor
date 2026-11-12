@@ -2,32 +2,27 @@ package com.shayor.apkextractor.ui.components
 
 import android.text.format.DateUtils
 import android.text.format.Formatter
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -44,71 +39,62 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.BrightnessAuto
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.animation.core.Animatable
-import androidx.compose.material.icons.automirrored.rounded.Undo
-import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarVisuals
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
+import androidx.compose.material3.SnackbarVisuals
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.clickable
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.material3.ripple
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
-import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shayor.apkextractor.data.AppIcons
 import com.shayor.apkextractor.data.AppInfo
 import com.shayor.apkextractor.data.ThemeMode
+import com.shayor.apkextractor.ui.theme.iosColors
 
 // -------------------------------------------------------------------------------------------------
 // Basics
@@ -149,32 +135,30 @@ fun packageFormat(fileName: String): PackageFormat? =
     }
 
 /**
- * A small, tracked uppercase tag (APK, SPLIT, APKS…). Neutral for plain APKs, softly tinted with the
- * accent for split apps and bundles, so the two read apart at a glance without shouting.
+ * A small uppercase capsule (APK, SPLIT, APKS…), like the badges in iOS lists. Grey for plain APKs,
+ * accent-tinted for split apps and bundles.
  */
 @Composable
 fun FormatTag(format: PackageFormat, modifier: Modifier = Modifier, detail: String? = null) {
-    val colors = MaterialTheme.colorScheme
-    val tint = if (format.accent) colors.primary else colors.onSurfaceVariant
+    val tint = if (format.accent) MaterialTheme.colorScheme.primary else iosColors.secondaryLabel
     Text(
         if (detail != null) "${format.tag}  ·  $detail" else format.tag,
-        style = MaterialTheme.typography.labelSmall.merge(TagStyle),
+        style = TagStyle,
         color = tint,
         maxLines = 1,
         modifier = modifier
             .semantics { contentDescription = format.description }
-            .clip(TagShape)
-            .background(tint.copy(alpha = if (format.accent) 0.12f else 0.09f))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
+            .clip(CircleShape)
+            .background(if (format.accent) tint.copy(alpha = 0.13f) else iosColors.tertiaryFill)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
     )
 }
 
-private val TagShape = RoundedCornerShape(6.dp)
 private val TagStyle = TextStyle(
     fontSize = 10.sp,
-    lineHeight = 12.sp,
-    fontWeight = FontWeight.SemiBold,
-    letterSpacing = 0.8.sp,
+    lineHeight = 13.sp,
+    fontWeight = FontWeight.Bold,
+    letterSpacing = 0.5.sp,
 )
 
 fun relativeTime(time: Long): String {
@@ -209,8 +193,8 @@ fun AppIcon(
             Box(
                 Modifier
                     .fillMaxSize(0.9f)
-                    .clip(RoundedCornerShape(percent = 28))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    .clip(RoundedCornerShape(percent = 26))
+                    .background(iosColors.tertiaryFill),
             )
         }
     }
@@ -220,84 +204,47 @@ fun AppIcon(
 // Surfaces
 // -------------------------------------------------------------------------------------------------
 
-/** Card with a hairline border — the basic building block of every screen. */
+/** A rounded card in the row colour: the building block of inset grouped screens. */
 @Composable
 fun Panel(
     modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(20.dp),
-    color: Color = MaterialTheme.colorScheme.surfaceContainerLowest,
-    border: Color? = MaterialTheme.colorScheme.outlineVariant,
+    shape: Shape = GroupShape,
+    color: Color = cellColor(),
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    val stroke = border?.let { BorderStroke(1.dp, it) }
-    if (onClick != null) {
-        Surface(onClick = onClick, shape = shape, color = color, border = stroke, modifier = modifier, content = content)
-    } else {
-        Surface(shape = shape, color = color, border = stroke, modifier = modifier, content = content)
-    }
-}
-
-@Composable
-fun PanelColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Panel(modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 4.dp), content = content) }
-}
-
-/** Round icon button: soft-filled, or white with a hairline border. */
-@Composable
-fun SquareButton(
-    onClick: () -> Unit,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-    size: Dp = 44.dp,
-    filled: Boolean = false,
-    content: @Composable () -> Unit,
-) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = if (filled) colors.surfaceContainerHigh else colors.surfaceContainerLowest,
-        contentColor = colors.onSurface,
-        border = if (filled) null else BorderStroke(1.dp, colors.outlineVariant),
-        modifier = modifier
-            .size(size)
-            .semantics { this.contentDescription = contentDescription },
-    ) {
-        Box(contentAlignment = Alignment.Center) { content() }
-    }
+    Box(
+        modifier
+            .clip(shape)
+            .background(color)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+    ) { content() }
 }
 
 // -------------------------------------------------------------------------------------------------
-// Buttons — one family: soft rounded rectangles that dip slightly when pressed.
+// Buttons — iOS capsules: filled (accent), tinted (accent on a soft tint) and round icon buttons.
+// Pressed, they sink a little and dim, then spring back.
 // -------------------------------------------------------------------------------------------------
 
-/** Shrinks slightly while pressed, for a tactile feel. Animates scale only (cheap, no relayout). */
 @Composable
-fun Modifier.pressScale(source: MutableInteractionSource, pressed: Float = 0.97f): Modifier {
-    val isPressed by source.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        if (isPressed) pressed else 1f,
-        spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMedium),
-        label = "press",
+private fun Modifier.dimWhilePressed(source: MutableInteractionSource): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val alpha by animateFloatAsState(
+        if (pressed) 0.72f else 1f,
+        if (pressed) tween(60) else tween(260),
+        label = "dim",
     )
-    return graphicsLayer {
-        scaleX = scale
-        scaleY = scale
-    }
+    return graphicsLayer { this.alpha = alpha }
 }
 
-/**
- * Main action: a slim, solid accent pill with an optional inline icon. Compact, but the filled
- * accent makes it the first thing the eye lands on.
- */
+/** Main action: a filled accent capsule. */
 @Composable
 fun PrimaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    height: Dp = 48.dp,
+    height: Dp = 50.dp,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
@@ -305,39 +252,30 @@ fun PrimaryButton(
         modifier
             .height(height)
             .pressScale(source)
+            .dimWhilePressed(source)
             .clip(CircleShape)
             .background(colors.primary)
-            .clickable(
-                interactionSource = source,
-                indication = ripple(color = colors.onPrimary),
-                role = Role.Button,
-                onClick = onClick,
-            )
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(18.dp))
+            Icon(icon, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(19.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp),
-            color = colors.onPrimary,
-            maxLines = 1,
-        )
+        Text(text, style = MaterialTheme.typography.titleMedium, color = colors.onPrimary, maxLines = 1)
     }
 }
 
-/** Quiet action (Cancel / Close): a soft accent-tinted pill, same size as [PrimaryButton]. */
+/** Quiet action (Cancel / Close): accent text on a soft accent tint, same size as [PrimaryButton]. */
 @Composable
 fun SecondaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    height: Dp = 48.dp,
+    height: Dp = 50.dp,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
@@ -345,106 +283,86 @@ fun SecondaryButton(
         modifier
             .height(height)
             .pressScale(source)
+            .dimWhilePressed(source)
             .clip(CircleShape)
-            .background(colors.primary.copy(alpha = 0.10f))
-            .clickable(
-                interactionSource = source,
-                indication = ripple(color = colors.primary),
-                role = Role.Button,
-                onClick = onClick,
-            )
+            .background(colors.primary.copy(alpha = if (iosColors.dark) 0.20f else 0.12f))
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
+            Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(19.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp),
-            color = colors.primary,
-            maxLines = 1,
-        )
+        Text(text, style = MaterialTheme.typography.titleMedium, color = colors.primary, maxLines = 1)
     }
 }
 
-/**
- * Round icon button (download, share, open folder…): a small circle with a soft accent tint and an
- * accent icon. Minimal, yet the colour makes it easy to spot on a row.
- */
+/** Round icon button (download, share, open folder…): accent glyph on a soft grey fill. */
 @Composable
 fun TonalIconButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    size: Dp = 36.dp,
+    size: Dp = 34.dp,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
     Box(
         modifier
             .size(size)
-            .pressScale(source, pressed = 0.88f)
+            .pressScale(source, pressed = 0.86f)
+            .dimWhilePressed(source)
             .clip(CircleShape)
-            .background(colors.primary.copy(alpha = 0.12f))
+            .background(iosColors.tertiaryFill)
             .clickable(
                 interactionSource = source,
-                indication = ripple(color = colors.primary),
+                indication = null,
                 role = Role.Button,
                 onClickLabel = contentDescription,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = contentDescription, tint = colors.primary, modifier = Modifier.size(size * 0.5f))
+        Icon(icon, contentDescription = contentDescription, tint = colors.primary, modifier = Modifier.size(size * 0.52f))
     }
 }
 
-/** Square shortcut tile: icon in a tinted circle, label underneath. */
+/** App Store–style "GET" pill: bold accent label on a grey capsule. */
 @Composable
-fun ActionTile(
-    label: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-) {
+fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
-    val alpha = if (enabled) 1f else 0.4f
-    Column(
+    Row(
         modifier
-            .pressScale(source)
-            .clip(RoundedCornerShape(20.dp))
-            // White on light sheets; one step brighter than the sheet in dark mode so tiles read.
-            .background(if (colors.background.luminance() < 0.5f) colors.surfaceContainerHigh else colors.surfaceContainerLowest)
-            .clickable(
-                interactionSource = source,
-                indication = ripple(),
-                enabled = enabled,
-                role = Role.Button,
-                onClick = onClick,
-            )
-            .graphicsLayer { this.alpha = alpha }
-            .padding(vertical = 14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .height(30.dp)
+            .pressScale(source, pressed = 0.9f)
+            .dimWhilePressed(source)
+            .clip(CircleShape)
+            .background(iosColors.tertiaryFill)
+            .clickable(source, indication = null, role = Role.Button, onClick = onClick)
+            .padding(horizontal = if (icon != null && text.isEmpty()) 13.dp else 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(colors.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) { Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp)) }
-        Spacer(Modifier.height(8.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium, color = colors.onSurface, maxLines = 1)
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(17.dp))
+            if (text.isNotEmpty()) Spacer(Modifier.width(4.dp))
+        }
+        if (text.isNotEmpty()) {
+            Text(text, style = PillStyle, color = colors.primary, maxLines = 1)
+        }
     }
 }
 
-/** Snackbar content for an undoable action; [durationMs] drives the draining progress bar. */
+private val PillStyle = TextStyle(fontSize = 15.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
+
+// -------------------------------------------------------------------------------------------------
+// Toasts — glass capsules
+// -------------------------------------------------------------------------------------------------
+
+/** Snackbar content for an undoable action; [durationMs] drives the draining progress line. */
 class UndoVisuals(override val message: String, val durationMs: Long) : SnackbarVisuals {
     override val actionLabel: String = "Undo"
     override val withDismissAction: Boolean = false
@@ -452,59 +370,68 @@ class UndoVisuals(override val message: String, val durationMs: Long) : Snackbar
 }
 
 /**
- * A clean card: message, an "Undo" pill, and a hairline bar along the bottom that drains over the
- * time left to undo. Only the bar animates (draw phase), so it costs next to nothing.
+ * A glass capsule: the message, an optional action, and (when undoable) a thin line along the
+ * bottom that drains over the time left. Only the line animates (draw phase).
  */
 @Composable
-private fun UndoSnackbar(data: SnackbarData, visuals: UndoVisuals) {
-    val colors = MaterialTheme.colorScheme
+private fun GlassToast(data: SnackbarData, undo: UndoVisuals?) {
+    val accent = MaterialTheme.colorScheme.primary
     val remaining = remember(data) { Animatable(1f) }
-    LaunchedEffect(data) {
-        remaining.animateTo(0f, tween(visuals.durationMs.toInt(), easing = LinearEasing))
+    if (undo != null) {
+        LaunchedEffect(data) { remaining.animateTo(0f, tween(undo.durationMs.toInt(), easing = LinearEasing)) }
     }
-    val accent = colors.inversePrimary
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = colors.inverseSurface,
-        contentColor = colors.inverseOnSurface,
-        shadowElevation = 6.dp,
-        modifier = Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth(),
+    val shape = RoundedCornerShape(26.dp)
+    Box(
+        Modifier
+            .padding(horizontal = Chrome.FloatingMargin)
+            .fillMaxWidth()
+            .glass(shape),
     ) {
-        Column {
-            Row(
-                Modifier.padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    visuals.message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(12.dp))
+        Row(
+            Modifier
+                .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp)
+                .height(40.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                data.visuals.message,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                maxLines = 2,
+                modifier = Modifier.weight(1f),
+            )
+            val action = data.visuals.actionLabel
+            if (action != null) {
+                Spacer(Modifier.width(10.dp))
                 Row(
                     Modifier
-                        .height(36.dp)
+                        .height(34.dp)
                         .clip(CircleShape)
-                        .background(accent.copy(alpha = 0.16f))
+                        .background(accent.copy(alpha = 0.14f))
                         .clickable(role = Role.Button, onClick = data::performAction)
                         .padding(start = 12.dp, end = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = null, tint = accent, modifier = Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Undo", style = MaterialTheme.typography.labelLarge, color = accent)
+                    if (undo != null) {
+                        Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = null, tint = accent, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(action, style = MaterialTheme.typography.labelLarge, color = accent)
                 }
             }
+        }
+        if (undo != null) {
             Box(
                 Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 24.dp)
                     .fillMaxWidth()
-                    .height(3.dp)
-                    .background(colors.inverseOnSurface.copy(alpha = 0.10f))
+                    .height(2.dp)
                     .drawBehind {
-                        drawRect(accent, size = Size(size.width * remaining.value, size.height))
+                        drawRoundRect(
+                            accent,
+                            size = Size(size.width * remaining.value, size.height),
+                            cornerRadius = CornerRadius(size.height),
+                        )
                     },
             )
         }
@@ -513,36 +440,12 @@ private fun UndoSnackbar(data: SnackbarData, visuals: UndoVisuals) {
 
 @Composable
 fun AppSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
-    SnackbarHost(state, modifier) { data ->
-        val undo = data.visuals as? UndoVisuals
-        if (undo != null) {
-            UndoSnackbar(data, undo)
-            return@SnackbarHost
-        }
-        Snackbar(
-            snackbarData = data,
-            shape = RoundedCornerShape(16.dp),
-            containerColor = MaterialTheme.colorScheme.inverseSurface,
-            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
-            actionColor = MaterialTheme.colorScheme.inversePrimary,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-    }
+    SnackbarHost(state, modifier) { data -> GlassToast(data, data.visuals as? UndoVisuals) }
 }
 
 // -------------------------------------------------------------------------------------------------
-// Typography helpers
+// Logo
 // -------------------------------------------------------------------------------------------------
-
-@Composable
-fun Eyebrow(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.6.sp),
-        color = MaterialTheme.colorScheme.tertiary,
-        modifier = modifier,
-    )
-}
 
 /**
  * The app's logo — the launcher icon's tile-out-of-tray glyph on its periwinkle gradient.
@@ -555,7 +458,7 @@ fun AppLogo(size: Dp = 36.dp, modifier: Modifier = Modifier) {
     Canvas(
         modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.3f))
+            .clip(RoundedCornerShape(size * 0.24f))
             .background(LogoGradient),
     ) {
         // Map the icon's 108×108 design space so its glyph fills the tile like the launcher icon.
@@ -580,70 +483,48 @@ private val LogoGlyph = Color(0xFF5560DA)
 private val TrayPath = PathParser().parsePathString("M33,57v7a10,10 0,0 0,10 10h22a10,10 0,0 0,10 -10v-7").toPath()
 private val ArrowPath = PathParser().parsePathString("M54,46V35.5M49,40.5l5,-5l5,5").toPath()
 
-/** Section title with an optional one-line subtitle and trailing actions. */
-@Composable
-fun ScreenHeader(
-    title: String,
-    modifier: Modifier = Modifier,
-    subtitle: String? = null,
-    actions: (@Composable RowScope.() -> Unit)? = null,
-) {
-    Row(
-        modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
-            if (subtitle != null) {
-                Spacer(Modifier.height(2.dp))
-                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        if (actions != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
-        }
-    }
-}
-
 // -------------------------------------------------------------------------------------------------
-// Tabs & segmented control
+// Segmented control
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * UISegmentedControl: a grey capsule track with a raised white thumb that glides (with a little
+ * spring) to the chosen segment.
+ */
 @Composable
 fun <T> SegmentedControl(
     options: List<T>,
     selected: T,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
-    height: Dp = 46.dp,
+    height: Dp = 34.dp,
     content: @Composable (option: T, active: Boolean) -> Unit,
 ) {
-    val colors = MaterialTheme.colorScheme
+    val p = iosColors
     val index = options.indexOf(selected).coerceAtLeast(0)
+    val thumbColor = if (p.dark) Color(0xFF636366) else Color.White
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
             .height(height)
             .clip(CircleShape)
-            .background(colors.surfaceContainerHigh)
-            .padding(4.dp),
+            .background(p.tertiaryFill)
+            .padding(2.dp),
     ) {
         val segment = maxWidth / options.size
         val offset by animateDpAsState(
             segment * index,
-            spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
+            spring(dampingRatio = 0.78f, stiffness = 520f),
             label = "thumb",
         )
         Box(
             Modifier
-                .offset(x = offset)
+                .offset { IntOffset(offset.roundToPx(), 0) }
                 .width(segment)
                 .fillMaxHeight()
-                .shadow(1.dp, CircleShape)
+                .dropShadow(CircleShape, Shadow(radius = 4.dp, color = Color.Black, offset = DpOffset(0.dp, 1.dp), alpha = 0.12f))
                 .clip(CircleShape)
-                .background(colors.surfaceBright),
+                .background(thumbColor),
         )
         Row(Modifier.fillMaxSize().selectableGroup()) {
             options.forEach { option ->
@@ -652,12 +533,38 @@ fun <T> SegmentedControl(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .clip(CircleShape)
-                        .selectable(selected = active, role = Role.Tab, onClick = { onSelect(option) }),
+                        .selectable(
+                            selected = active,
+                            role = Role.Tab,
+                            interactionSource = null,
+                            indication = null,
+                            onClick = { onSelect(option) },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) { content(option, active) }
             }
         }
+    }
+}
+
+/** Plain text segment label: semibold when chosen, as on iOS. */
+@Composable
+fun SegmentLabel(text: String, active: Boolean, icon: ImageVector? = null) {
+    val p = iosColors
+    val tint by animateColorAsState(if (active) p.label else p.label.copy(alpha = 0.8f), label = "seg")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(5.dp))
+        }
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+            ),
+            color = tint,
+            maxLines = 1,
+        )
     }
 }
 
@@ -674,47 +581,21 @@ fun ThemeMode.icon(): ImageVector = when (this) {
 }
 
 fun ThemeMode.label(): String = when (this) {
-    ThemeMode.SYSTEM -> "Auto"
+    ThemeMode.SYSTEM -> "Automatic"
     ThemeMode.LIGHT -> "Light"
     ThemeMode.DARK -> "Dark"
 }
 
 @Composable
 fun ThemeSelector(mode: ThemeMode, onChange: (ThemeMode) -> Unit, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    SegmentedControl(themeModes, mode, onChange, modifier) { m, active ->
-        val tint by animateColorAsState(if (active) colors.onSurface else colors.onSurfaceVariant, label = "seg")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(m.icon(), contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(m.label(), style = MaterialTheme.typography.labelLarge, color = tint)
-        }
-    }
+    SegmentedControl(themeModes, mode, onChange, modifier) { m, active -> SegmentLabel(m.label(), active, m.icon()) }
 }
 
 // -------------------------------------------------------------------------------------------------
-// Rows, empty & loading states
+// Empty & loading states
 // -------------------------------------------------------------------------------------------------
 
-@Composable
-fun IconTile(icon: ImageVector, accent: Boolean = false) {
-    val colors = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .size(38.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (accent) colors.primary else colors.surfaceContainerHigh),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = if (accent) colors.onPrimary else colors.onSurface,
-            modifier = Modifier.size(19.dp),
-        )
-    }
-}
-
+/** ContentUnavailableView: a large grey symbol, a bold title, a line of help and an optional button. */
 @Composable
 fun EmptyState(
     icon: ImageVector,
@@ -723,54 +604,56 @@ fun EmptyState(
     modifier: Modifier = Modifier,
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
+    val p = iosColors
     Column(
-        modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 56.dp),
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp, vertical = 56.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier
-                .size(64.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center,
-        ) { Icon(icon, contentDescription = null, modifier = Modifier.size(28.dp)) }
-        Spacer(Modifier.height(18.dp))
-        Text(title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        Icon(icon, contentDescription = null, tint = p.secondaryLabel, modifier = Modifier.size(52.dp))
+        Spacer(Modifier.height(14.dp))
+        Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
         Text(
             message,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = p.secondaryLabel,
             textAlign = TextAlign.Center,
         )
         if (action != null) {
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(20.dp))
             Row(content = action)
         }
     }
 }
 
+/** A placeholder list row that breathes while the list loads. */
 @Composable
-fun SkeletonRow(modifier: Modifier = Modifier) {
+fun SkeletonRow(modifier: Modifier = Modifier, shape: Shape = RoundedCornerShape(0.dp)) {
     val transition = rememberInfiniteTransition(label = "skeleton")
     val alpha by transition.animateFloat(
-        initialValue = 0.4f,
+        initialValue = 0.45f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(tween(850, easing = LinearEasing), RepeatMode.Reverse),
         label = "alpha",
     )
-    val block = MaterialTheme.colorScheme.surfaceContainerHigh
-    Panel(modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha }) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(50.dp).clip(RoundedCornerShape(14.dp)).background(block))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Box(Modifier.fillMaxWidth(0.5f).height(14.dp).clip(CircleShape).background(block))
-                Spacer(Modifier.height(8.dp))
-                Box(Modifier.fillMaxWidth(0.7f).height(10.dp).clip(CircleShape).background(block))
-                Spacer(Modifier.height(6.dp))
-                Box(Modifier.fillMaxWidth(0.35f).height(10.dp).clip(CircleShape).background(block))
-            }
+    val block = iosColors.tertiaryFill
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(cellColor())
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .graphicsLayer { this.alpha = alpha },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(block))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Box(Modifier.fillMaxWidth(0.5f).height(14.dp).clip(CircleShape).background(block))
+            Spacer(Modifier.height(8.dp))
+            Box(Modifier.fillMaxWidth(0.7f).height(10.dp).clip(CircleShape).background(block))
         }
     }
 }

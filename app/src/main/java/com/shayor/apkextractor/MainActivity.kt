@@ -80,12 +80,14 @@ class MainActivity : ComponentActivity() {
             // (otherwise it follows the device setting and flashes the wrong colours).
             LaunchedEffect(settings.themeMode) { applyAppNightMode(settings.themeMode) }
 
-            // Status/navigation bar icons follow the app theme, not the system one.
+            // Status/navigation bar icons follow the app theme, not the system one. Both bars are
+            // fully transparent: content scrolls beneath them and the floating glass tab bar.
             DisposableEffect(dark) {
                 enableEdgeToEdge(
                     statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
-                    navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
                 )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
                 onDispose {}
             }
 
@@ -173,7 +175,5 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val KEY_APPLIED_NIGHT_MODE = "applied_night_mode"
         const val SPLASH_MAX_HOLD_MS = 1_500L
-        val LIGHT_SCRIM = Color.argb(0xE6, 0xFF, 0xFF, 0xFF)
-        val DARK_SCRIM = Color.argb(0x80, 0x1B, 0x1B, 0x1B)
     }
 }

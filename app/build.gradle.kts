@@ -12,14 +12,15 @@ android {
     compileSdk {
         version = release(37)
     }
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "com.shayor.apkextractor"
         minSdk = 24
         targetSdk = 37
-        versionCode = 2
+        versionCode = 3
 
-        versionName = "1.1.0"
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -105,6 +106,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.compose.material.icons.extended)
+    // Backdrop blur for the iOS-style glass bars (RenderEffect on Android 12+, a tinted scrim before).
+    implementation(libs.haze)
     // Split APK merging (resource table merge) + re-signing.
     implementation(libs.arsclib)
     implementation(libs.apksig)

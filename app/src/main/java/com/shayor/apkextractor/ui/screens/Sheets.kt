@@ -9,25 +9,20 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
-import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.border
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material.icons.rounded.WarningAmber
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,65 +40,111 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shop
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material3.Switch
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.material3.SwitchDefaults
-import androidx.compose.runtime.produceState
 import com.shayor.apkextractor.data.AppDetails
 import com.shayor.apkextractor.data.AppDetailsLoader
 import com.shayor.apkextractor.data.AppInfo
 import com.shayor.apkextractor.data.SplitMode
 import com.shayor.apkextractor.ui.UiEvent
-import com.shayor.apkextractor.ui.components.ActionTile
 import com.shayor.apkextractor.ui.components.AppIcon
-import com.shayor.apkextractor.ui.components.Eyebrow
-import com.shayor.apkextractor.ui.components.Panel
+import com.shayor.apkextractor.ui.components.CellDivider
+import com.shayor.apkextractor.ui.components.CloseButton
+import com.shayor.apkextractor.ui.components.FormatTag
+import com.shayor.apkextractor.ui.components.IconTile
+import com.shayor.apkextractor.ui.components.InsetGroup
+import com.shayor.apkextractor.ui.components.IosSheet
 import com.shayor.apkextractor.ui.components.PrimaryButton
 import com.shayor.apkextractor.ui.components.SecondaryButton
+import com.shayor.apkextractor.ui.components.SectionHeader
+import com.shayor.apkextractor.ui.components.SegmentLabel
+import com.shayor.apkextractor.ui.components.ShareButton
+import com.shayor.apkextractor.ui.components.SegmentedControl
+import com.shayor.apkextractor.ui.components.SwitchCell
 import com.shayor.apkextractor.ui.components.TonalIconButton
+import com.shayor.apkextractor.ui.components.cellColor
+import com.shayor.apkextractor.ui.components.packageFormat
+import com.shayor.apkextractor.ui.components.pressScale
 import com.shayor.apkextractor.ui.components.rememberFileSize
 import com.shayor.apkextractor.ui.components.versionLabel
-import com.shayor.apkextractor.ui.components.FormatTag
-import com.shayor.apkextractor.ui.components.packageFormat
+import com.shayor.apkextractor.ui.theme.iosColors
 import java.text.DateFormat
 import java.util.Date
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    // Never taller than ~80% of the screen, so the sheet reads as a sheet over the app, not a new page;
-    // longer content scrolls inside it.
-    val maxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.8f
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-    ) { Box(Modifier.heightIn(max = maxHeight)) { content() } }
+    IosSheet(onDismiss) { content() }
+}
+
+/**
+ * [verticalScroll] for content inside a [Sheet], with the behaviour people expect from sheets.
+ *
+ * Out of the box, a downward swipe in scrolled content scrolls it to the top and then hands the
+ * rest of the drag (and of the fling's velocity) to the sheet, which slides closed in the same
+ * motion. Here, a swipe that starts while the content is scrolled stops at the top, and only a new
+ * swipe starting from the top moves the sheet.
+ */
+@Composable
+private fun Modifier.sheetScroll(state: ScrollState): Modifier {
+    val guard = remember(state) { SheetScrollGuard() }
+    return this
+        .pointerInput(guard) {
+            awaitEachGesture {
+                // Initial pass: seen before the scrollable reacts, without consuming anything.
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                guard.startedScrolled = state.value > 0
+            }
+        }
+        .nestedScroll(guard)
+        .verticalScroll(state)
+}
+
+private class SheetScrollGuard : NestedScrollConnection {
+    /** Whether the current (or just-released, still flinging) gesture began away from the top. */
+    var startedScrolled = false
+
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+        if (startedScrolled && available.y > 0f) Offset(0f, available.y) else Offset.Zero
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
+        if (startedScrolled && available.y > 0f) Velocity(0f, available.y) else Velocity.Zero
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -122,6 +163,7 @@ fun AppDetailsSheet(
     onAutoBackupChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
+    val p = iosColors
     // Loaded when the sheet opens: too costly to read for every app in the list.
     val details by produceState<AppDetails?>(null, app.packageName, app.lastUpdateTime) {
         value = AppDetailsLoader.load(context, app)
@@ -131,7 +173,6 @@ fun AppDetailsSheet(
         mutableStateOf(if (splitMode == SplitMode.BUNDLE) SplitMode.BUNDLE else SplitMode.MERGE)
     }
     val mode = if (app.isSplit) format else splitMode
-    val colors = MaterialTheme.colorScheme
     val launchIntent = remember(app.packageName, app.lastUpdateTime) {
         context.packageManager.getLaunchIntentForPackage(app.packageName)
     }
@@ -140,32 +181,46 @@ fun AppDetailsSheet(
     Sheet(onDismiss) {
         Column(
             Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
+                .sheetScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppIcon(app.packageName, app.iconKey, 64.dp)
-                Spacer(Modifier.width(16.dp))
+            // App Store–style header: big icon, name, version, and the main action under them.
+            Row(Modifier.padding(start = 4.dp, top = 6.dp), verticalAlignment = Alignment.Top) {
+                AppIcon(app.packageName, app.iconKey, 84.dp)
+                Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(app.label, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(2.dp))
                     Text(
-                        "${versionLabel(app).take(20)}  •  ${rememberFileSize(app.sizeBytes)}",
+                        "${versionLabel(app).take(20)}  ·  ${rememberFileSize(app.sizeBytes)}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = colors.onSurfaceVariant,
+                        color = p.secondaryLabel,
                         maxLines = 1,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                     FormatTag(
                         packageFormat(app),
                         detail = if (app.isSplit) "${app.splitSourceDirs.size + 1} PARTS" else null,
                     )
                 }
+                CloseButton(onDismiss)
             }
 
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(18.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PrimaryButton(
+                    if (app.isSplit && format == SplitMode.BUNDLE) "Extract APKS" else "Extract APK",
+                    onClick = { onExtract(mode) },
+                    icon = Icons.Rounded.Download,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(10.dp))
+                ShareButton(app.isSplit, onShare = { chosen -> onShare(chosen ?: mode) }, size = 50.dp)
+            }
+
+            // Like the action buttons on an iOS contact card.
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 QuickAction(
                     "Open",
                     Icons.AutoMirrored.Rounded.OpenInNew,
@@ -174,7 +229,7 @@ fun AppDetailsSheet(
                     modifier = Modifier.weight(1f),
                 )
                 QuickAction(
-                    "App info",
+                    "App Info",
                     Icons.Rounded.Info,
                     onClick = {
                         safeStart(
@@ -187,89 +242,52 @@ fun AppDetailsSheet(
                 QuickAction("Store", Icons.Rounded.Shop, onClick = { openStore(context, app.packageName) }, modifier = Modifier.weight(1f))
             }
 
-            if (app.isSplit) {
-                Spacer(Modifier.height(22.dp))
-                FormatPicker(format, onSelect = { format = it })
-            }
+            if (app.isSplit) FormatPicker(format, onSelect = { format = it })
 
-            Spacer(Modifier.height(22.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PrimaryButton(
-                    if (app.isSplit && format == SplitMode.BUNDLE) "Extract APKS" else "Extract APK",
-                    onClick = { onExtract(mode) },
-                    modifier = Modifier.weight(1f),
+            SectionHeader("Backup")
+            InsetGroup {
+                SwitchCell(
+                    "Auto-Backup Updates",
+                    autoBackup,
+                    onAutoBackupChange,
+                    icon = { IconTile(Icons.Rounded.Autorenew, p.green) },
+                    subtitle = "Save each new version to $saveLocation",
                 )
-                TonalIconButton(Icons.Rounded.Share, "Share", onClick = { onShare(mode) }, size = 48.dp)
             }
 
-            Spacer(Modifier.height(12.dp))
-            Panel(Modifier.fillMaxWidth()) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .toggleable(value = autoBackup, onValueChange = onAutoBackupChange, role = Role.Switch)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Auto-backup updates", style = MaterialTheme.typography.titleSmall)
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "Save each new version to $saveLocation",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Switch(
-                        checked = autoBackup,
-                        onCheckedChange = null,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = colors.primary,
-                            checkedThumbColor = colors.onPrimary,
-                            uncheckedTrackColor = colors.surfaceContainerHigh,
-                            uncheckedBorderColor = colors.surfaceContainerHigh,
-                            uncheckedThumbColor = colors.onSurfaceVariant,
-                        ),
-                    )
+            SectionHeader("Information")
+            InsetGroup {
+                InfoRow("Package", app.packageName, onClick = { copyToClipboard(context, "Package name", app.packageName) }) {
+                    Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = p.tertiaryLabel, modifier = Modifier.size(15.dp))
                 }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Panel(Modifier.fillMaxWidth()) {
-                Column {
-                    InfoRow("Package", app.packageName, onClick = { copyToClipboard(context, "Package name", app.packageName) }) {
-                        Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = colors.onSurfaceVariant, modifier = Modifier.size(15.dp))
-                    }
-                    InfoDivider()
-                    InfoRow("Version code", app.versionCode.toString())
-                    InfoDivider()
-                    InfoRow("Android", "${androidName(app.minSdk)}+  ·  targets ${androidName(app.targetSdk)}")
-                    InfoDivider()
-                    InfoRow("Installed", dateFormat.format(Date(app.firstInstallTime)))
-                    InfoDivider()
-                    InfoRow("Updated", dateFormat.format(Date(app.lastUpdateTime)))
-                    InfoDivider()
-                    InfoRow("Installed from", details?.let { it.installer ?: "Unknown" } ?: "…")
-                    InfoDivider()
-                    val signatures = details?.signatures.orEmpty()
-                    val signature = signatures.firstOrNull()
-                    InfoRow(
-                        "Signature",
-                        when {
-                            details == null -> "…"
-                            signature == null -> "Unknown"
-                            else -> "SHA-256 ${signature.take(11)}…${signature.takeLast(5)}"
-                        },
-                        onClick = if (signature != null) {
-                            { copyToClipboard(context, "Signature", signatures.joinToString("\n")) }
-                        } else {
-                            null
-                        },
-                    ) {
-                        if (signature != null) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = colors.onSurfaceVariant, modifier = Modifier.size(15.dp))
-                        }
+                CellDivider()
+                InfoRow("Version Code", app.versionCode.toString())
+                CellDivider()
+                InfoRow("Android", "${androidName(app.minSdk)}+  ·  targets ${androidName(app.targetSdk)}")
+                CellDivider()
+                InfoRow("Installed", dateFormat.format(Date(app.firstInstallTime)))
+                CellDivider()
+                InfoRow("Updated", dateFormat.format(Date(app.lastUpdateTime)))
+                CellDivider()
+                InfoRow("Installed From", details?.let { it.installer ?: "Unknown" } ?: "…")
+                CellDivider()
+                val signatures = details?.signatures.orEmpty()
+                val signature = signatures.firstOrNull()
+                InfoRow(
+                    "Signature",
+                    when {
+                        details == null -> "…"
+                        signature == null -> "Unknown"
+                        else -> "SHA-256 ${signature.take(11)}…${signature.takeLast(5)}"
+                    },
+                    onClick = if (signature != null) {
+                        { copyToClipboard(context, "Signature", signatures.joinToString("\n")) }
+                    } else {
+                        null
+                    },
+                ) {
+                    if (signature != null) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = p.tertiaryLabel, modifier = Modifier.size(15.dp))
                     }
                 }
             }
@@ -277,7 +295,7 @@ fun AppDetailsSheet(
     }
 }
 
-/** A small tonal pill (icon + label) for the secondary links in the details sheet. */
+/** An accent glyph over a small label on a rounded tile, like the buttons on an iOS contact card. */
 @Composable
 private fun QuickAction(
     label: String,
@@ -286,29 +304,25 @@ private fun QuickAction(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    val colors = MaterialTheme.colorScheme
-    val tint = if (enabled) colors.onSurface else colors.onSurface.copy(alpha = 0.38f)
-    Row(
+    val accent = MaterialTheme.colorScheme.primary
+    val source = remember { MutableInteractionSource() }
+    Column(
         modifier
-            .height(38.dp)
-            .clip(CircleShape)
-            .background(colors.surfaceContainerHigh)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
+            .pressScale(source, 0.94f)
+            .clip(RoundedCornerShape(16.dp))
+            .background(cellColor())
+            .clickable(source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
+            .padding(vertical = 11.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, contentDescription = null, tint = if (enabled) colors.primary else tint, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(label, style = MaterialTheme.typography.labelLarge, color = tint, maxLines = 1)
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = accent, maxLines = 1)
     }
 }
 
-@Composable
-private fun InfoDivider() {
-    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
-}
-
+/** A row of the information table: the label on the left, the value in grey on the right. */
 @Composable
 private fun InfoRow(
     label: String,
@@ -319,14 +333,15 @@ private fun InfoRow(
 ) {
     val base = Modifier.fillMaxWidth()
     Row(
-        (if (onClick != null) base.clickable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 12.dp),
+        (if (onClick != null) base.clickable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.width(16.dp))
         Text(
             value,
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.bodyLarge,
+            color = iosColors.secondaryLabel,
             textAlign = TextAlign.End,
             maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
@@ -345,123 +360,41 @@ private fun InfoRow(
 
 @Composable
 private fun FormatPicker(selected: SplitMode, onSelect: (SplitMode) -> Unit) {
-    val colors = MaterialTheme.colorScheme
+    val p = iosColors
     Column {
-        Text(
-            "SAVE AS",
-            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
-            color = colors.onSurfaceVariant,
-            modifier = Modifier.padding(start = 4.dp, bottom = 10.dp),
-        )
-        Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FormatTile(
-                title = "APK",
-                subtitle = "One file that installs anywhere",
-                selected = selected == SplitMode.MERGE,
-                onClick = { onSelect(SplitMode.MERGE) },
-                modifier = Modifier.weight(1f),
-            )
-            FormatTile(
-                title = "APKS",
-                subtitle = "Original parts, original signature",
-                selected = selected == SplitMode.BUNDLE,
-                onClick = { onSelect(SplitMode.BUNDLE) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(10.dp))
+        SectionHeader("Save As")
+        SegmentedControl(
+            options = listOf(SplitMode.MERGE, SplitMode.BUNDLE),
+            selected = selected,
+            onSelect = onSelect,
+            height = 36.dp,
+        ) { mode, active -> SegmentLabel(if (mode == SplitMode.MERGE) "Single APK" else "APKS Bundle", active) }
+        Spacer(Modifier.height(8.dp))
         AnimatedContent(selected, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "formatNote") { mode ->
             if (mode == SplitMode.BUNDLE) {
                 FormatNote(
                     Icons.Rounded.Info,
-                    colors.primary,
-                    "No extra app needed: install it with APK Extractor from the Install tab, or by sharing the file to it.",
+                    MaterialTheme.colorScheme.primary,
+                    "Keeps the original parts and signature. Install it with APK Extractor from the Install tab, or by sharing the file to it.",
                 )
             } else {
                 FormatNote(
                     Icons.Rounded.WarningAmber,
-                    colors.error,
-                    "Some apps may not open once merged into a single APK. If that happens, save as APKS instead.",
+                    p.orange,
+                    "One file that installs anywhere. Some apps may not open once merged; if so, save as APKS instead.",
                 )
             }
         }
     }
 }
 
-@Composable
-private fun FormatTile(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = MaterialTheme.colorScheme
-    val dark = colors.background.luminance() < 0.5f
-    val bg by animateColorAsState(
-        when {
-            selected -> colors.primaryContainer
-            dark -> colors.surfaceContainerHigh
-            else -> colors.surfaceContainerLowest
-        },
-        label = "tileBg",
-    )
-    val border by animateColorAsState(if (selected) colors.primary else colors.outlineVariant, label = "tileBorder")
-    val shape = RoundedCornerShape(20.dp)
-    Column(
-        modifier
-            .clip(shape)
-            .background(bg)
-            .border(if (selected) 1.5.dp else 1.dp, border, shape)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                color = if (selected) colors.onPrimaryContainer else colors.onSurface,
-                modifier = Modifier.weight(1f),
-            )
-            RadioDot(selected)
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (selected) colors.onPrimaryContainer.copy(alpha = 0.8f) else colors.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun RadioDot(selected: Boolean) {
-    val colors = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .size(22.dp)
-            .clip(CircleShape)
-            .background(if (selected) colors.primary else Color.Transparent)
-            .then(if (selected) Modifier else Modifier.border(1.5.dp, colors.outline, CircleShape)),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (selected) Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(14.dp))
-    }
-}
-
+/** Footnote under a control, with a small leading symbol. */
 @Composable
 private fun FormatNote(icon: ImageVector, tint: Color, text: String) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(10.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.Top) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.padding(top = 1.dp).size(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = iosColors.secondaryLabel)
     }
 }
 
@@ -476,53 +409,62 @@ fun ExtractResultSheet(
     onOpenFolder: () -> Unit,
     onShare: () -> Unit,
 ) {
-    val colors = MaterialTheme.colorScheme
+    val p = iosColors
     val ok = result.saved.isNotEmpty()
     Sheet(onDismiss) {
         Column(
             Modifier
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(top = 8.dp, bottom = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(
-                Modifier
-                    .size(52.dp)
-                    .clip(CircleShape)
-                    .background(if (ok) colors.primary else colors.errorContainer),
-                contentAlignment = Alignment.Center,
+            // The badge pops in with a little overshoot, like iOS completion checkmarks.
+            val shown = remember { MutableTransitionState(false).apply { targetState = true } }
+            AnimatedVisibility(
+                visibleState = shown,
+                enter = scaleIn(spring(dampingRatio = 0.5f, stiffness = 400f), initialScale = 0.4f) + fadeIn(),
             ) {
-                Icon(
-                    if (ok) Icons.Rounded.Check else Icons.Rounded.ErrorOutline,
-                    contentDescription = null,
-                    tint = if (ok) colors.onPrimary else colors.onErrorContainer,
-                    modifier = Modifier.size(26.dp),
-                )
+                Box(
+                    Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(if (ok) p.green else p.red),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (ok) Icons.Rounded.Check else Icons.Rounded.ErrorOutline,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(34.dp),
+                    )
+                }
             }
-            Spacer(Modifier.height(16.dp))
-            Eyebrow(if (ok) "Extraction complete" else "Extraction failed")
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(14.dp))
             Text(
                 when {
-                    !ok -> if (result.failures.size == 1) "Couldn't save ${result.failures[0].first}" else "Couldn't save apps"
-                    result.saved.size == 1 -> "${result.saved[0].label} is saved"
-                    else -> "${result.saved.size} apps saved"
+                    !ok -> if (result.failures.size == 1) "Couldn't Save ${result.failures[0].first}" else "Couldn't Save Apps"
+                    result.saved.size == 1 -> "${result.saved[0].label} Saved"
+                    else -> "${result.saved.size} Apps Saved"
                 },
                 style = MaterialTheme.typography.headlineSmall,
+                textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 if (ok) "In ${result.location}" else result.failures.firstOrNull()?.second.orEmpty(),
                 style = MaterialTheme.typography.bodyMedium,
-                color = colors.onSurfaceVariant,
+                color = p.secondaryLabel,
+                textAlign = TextAlign.Center,
             )
 
             if (ok) {
                 Spacer(Modifier.height(18.dp))
-                Panel(Modifier.fillMaxWidth()) {
-                    Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                InsetGroup {
+                    Column(Modifier.heightIn(max = 240.dp).sheetScroll(rememberScrollState())) {
                         result.saved.forEachIndexed { i, item ->
-                            if (i > 0) InfoDivider()
-                            Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (i > 0) CellDivider(62.dp)
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 AppIcon(item.packageName, item.iconKey, 36.dp)
                                 Spacer(Modifier.width(12.dp))
                                 Text(
@@ -539,28 +481,29 @@ fun ExtractResultSheet(
 
             // Bundles (.apks) need a split installer — APK Extractor is one.
             if (ok && result.saved.any { it.file.displayName.endsWith(".apks", ignoreCase = true) }) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 FormatNote(
                     Icons.Rounded.Info,
-                    colors.primary,
+                    MaterialTheme.colorScheme.primary,
                     "To install the .apks bundle, open the Install tab here, or share the file to APK Extractor.",
                 )
             }
 
             if (ok && result.failures.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "${result.failures.size} couldn't be saved: " + result.failures.joinToString { it.first },
                     style = MaterialTheme.typography.bodySmall,
-                    color = colors.error,
+                    color = p.red,
                 )
             }
 
             Spacer(Modifier.height(22.dp))
             if (ok) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PrimaryButton("Open folder", onClick = onOpenFolder, modifier = Modifier.weight(1f))
-                    TonalIconButton(Icons.Rounded.Share, "Share", onClick = onShare, size = 48.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PrimaryButton("Open Folder", onClick = onOpenFolder, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(10.dp))
+                    TonalIconButton(Icons.Rounded.Share, "Share", onClick = onShare, size = 50.dp)
                 }
             } else {
                 SecondaryButton("Close", onClick = onDismiss, modifier = Modifier.fillMaxWidth())

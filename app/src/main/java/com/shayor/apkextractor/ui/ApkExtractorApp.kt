@@ -6,61 +6,50 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.InstallMobile
-import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -70,16 +59,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -88,12 +85,18 @@ import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.shayor.apkextractor.data.ApkExporter
 import com.shayor.apkextractor.data.SplitMode
-import com.shayor.apkextractor.ui.components.AppLogo
 import com.shayor.apkextractor.ui.components.AppSnackbarHost
+import com.shayor.apkextractor.ui.components.Chrome
+import com.shayor.apkextractor.ui.components.CloseButton
+import com.shayor.apkextractor.ui.components.LocalGlassKey
+import com.shayor.apkextractor.ui.components.LocalGlassState
+import com.shayor.apkextractor.ui.components.PrimaryButton
+import com.shayor.apkextractor.ui.components.ShareButton
+import com.shayor.apkextractor.ui.components.TonalIconButton
 import com.shayor.apkextractor.ui.components.UndoVisuals
-import androidx.compose.ui.platform.LocalAccessibilityManager
-import kotlinx.coroutines.delay
-import com.shayor.apkextractor.ui.components.Panel
+import com.shayor.apkextractor.ui.components.glass
+import com.shayor.apkextractor.ui.components.pressScale
+import com.shayor.apkextractor.ui.components.tabBarClearance
 import com.shayor.apkextractor.ui.screens.AppDetailsSheet
 import com.shayor.apkextractor.ui.screens.AppsScreen
 import com.shayor.apkextractor.ui.screens.ExtractResultSheet
@@ -101,8 +104,20 @@ import com.shayor.apkextractor.ui.screens.HistoryScreen
 import com.shayor.apkextractor.ui.screens.InstallScreen
 import com.shayor.apkextractor.ui.screens.InstallSheet
 import com.shayor.apkextractor.ui.screens.SettingsScreen
-import com.shayor.apkextractor.ui.screens.TaskProgressDialog
+import com.shayor.apkextractor.ui.screens.TaskProgressHost
+import com.shayor.apkextractor.ui.theme.iosColors
+import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/** Tab crossfade: the new tab fades in a touch slower than the old one fades out. */
+private const val TAB_FADE_IN_MS = 180
+private const val TAB_FADE_OUT_MS = 110
+
+/** A file that takes longer than this to read opens the install sheet with placeholders. */
+private const val SLOW_READ_MS = 300L
 
 /** How long a removal can be undone (before accessibility adjustments). */
 private const val UNDO_WINDOW_MS = 6_000L
@@ -122,7 +137,6 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     val colors = MaterialTheme.colorScheme
     val snackbar = remember { SnackbarHostState() }
     val accessibility = LocalAccessibilityManager.current
-    val task by vm.task.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
     val appsByPackage by vm.appsByPackage.collectAsStateWithLifecycle()
@@ -131,12 +145,11 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     var tab by rememberSaveable { mutableStateOf(Tab.APPS) }
     var detailsPkg by rememberSaveable { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<UiEvent.Extracted?>(null) }
-    // Tabs live in a pager: swipe between them, or tap the bottom bar to glide there.
-    val pager = rememberPagerState(initialPage = tab.ordinal) { Tab.entries.size }
-    LaunchedEffect(pager) {
-        snapshotFlow { pager.targetPage }.collect { tab = Tab.entries[it] }
-    }
-    val goTo: (Tab) -> Unit = { t -> scope.launch { pager.animateScrollToPage(t.ordinal) } }
+    // Tabs switch only from the tab bar (as on iOS and in Material bottom navigation): no sideways
+    // swipe, so horizontal gestures inside a screen (share, delete) never fight with the tabs.
+    val goTo: (Tab) -> Unit = { t -> tab = t }
+    // Each tab keeps its scroll position, search text etc. while another tab is showing.
+    val tabStates = rememberSaveableStateHolder()
 
     // --- Installing APKs ---------------------------------------------------------------------
     val installVm: InstallViewModel = viewModel()
@@ -170,10 +183,10 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     LaunchedEffect(shortcut) {
         when (shortcut ?: return@LaunchedEffect) {
             Shortcut.INSTALL -> {
-                pager.scrollToPage(Tab.INSTALL.ordinal)
+                tab = Tab.INSTALL
                 lifecycleOwner.lifecycle.withResumed { pickFile() }
             }
-            Shortcut.BACKUP_ALL -> pager.scrollToPage(Tab.APPS.ordinal)
+            Shortcut.BACKUP_ALL -> tab = Tab.APPS
         }
         vm.consumeShortcut()
     }
@@ -254,73 +267,82 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
 
     BackHandler(enabled = tab != Tab.APPS) { goTo(Tab.APPS) }
 
-    val pagePadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 24.dp)
+    // Pages run edge to edge under the glass bars; each adds its own top bar height. The bottom
+    // keeps the last rows clear of the floating tab bar.
+    val pagePadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = tabBarClearance() + 28.dp)
+    val glass = rememberHazeState()
+    val selecting = selection.isNotEmpty() && tab == Tab.APPS
 
-    CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
-        Column(
+    CompositionLocalProvider(LocalContentColor provides colors.onBackground, LocalGlassState provides glass) {
+        Box(
             Modifier
                 .fillMaxSize()
                 .background(colors.background),
         ) {
-            BrandBar()
-            Box(Modifier.weight(1f)) {
-                HorizontalPager(
-                    state = pager,
-                    // Keep the neighbouring tab composed so a swipe never waits for it to build.
-                    beyondViewportPageCount = 1,
-                    key = { Tab.entries[it].name },
-                    modifier = Modifier.fillMaxSize(),
-                ) { page ->
-                    when (Tab.entries[page]) {
-                        Tab.APPS -> AppsScreen(
-                            vm = vm,
-                            contentPadding = pagePadding,
-                            onExtract = requestExtract,
-                            onShare = { pkg -> vm.share(listOf(pkg)) },
-                            onOpenApp = { detailsPkg = it },
-                        )
-                        Tab.INSTALL -> InstallScreen(vm, installVm, pagePadding, onPickFile = pickFile)
-                        Tab.HISTORY -> HistoryScreen(
-                            vm,
-                            pagePadding,
-                            onBrowseApps = { goTo(Tab.APPS) },
-                            onInstall = installVm::open,
-                        )
-                        Tab.SETTINGS -> SettingsScreen(vm, snackbar, pagePadding)
-                    }
+            // A quick crossfade between tabs. Only the visible tab is composed (and blurred), apart
+            // from the moment both are fading.
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = { fadeIn(tween(TAB_FADE_IN_MS)) togetherWith fadeOut(tween(TAB_FADE_OUT_MS)) },
+                label = "tab",
+                modifier = Modifier.fillMaxSize(),
+            ) { shown ->
+                tabStates.SaveableStateProvider(shown.name) {
+                CompositionLocalProvider(LocalGlassKey provides shown) {
+                when (shown) {
+                    Tab.APPS -> AppsScreen(
+                        vm = vm,
+                        contentPadding = pagePadding,
+                        onExtract = requestExtract,
+                        onShare = { pkg -> vm.share(listOf(pkg)) },
+                        onOpenApp = { detailsPkg = it },
+                    )
+                    Tab.INSTALL -> InstallScreen(vm, installVm, pagePadding, onPickFile = pickFile)
+                    Tab.HISTORY -> HistoryScreen(
+                        vm,
+                        pagePadding,
+                        onBrowseApps = { goTo(Tab.APPS) },
+                        onInstall = installVm::open,
+                    )
+                    Tab.SETTINGS -> SettingsScreen(vm, snackbar, pagePadding)
                 }
-                AppSnackbarHost(
-                    snackbar,
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        // Clear the floating search dock on the Apps tab.
-                        .padding(bottom = if (tab == Tab.APPS && selection.isEmpty()) 80.dp else 8.dp),
-                )
+                }
+                }
             }
 
-            // Docked bottom bar: tabs, or actions while selecting apps.
-            Surface(color = colors.surfaceContainerLowest) {
-                Column(Modifier.navigationBarsPadding()) {
-                    HorizontalDivider(color = colors.outlineVariant)
-                    AnimatedContent(
-                        targetState = selection.isNotEmpty() && tab == Tab.APPS,
-                        transitionSpec = {
-                            (slideInVertically { it / 2 } + fadeIn()) togetherWith (slideOutVertically { it / 2 } + fadeOut())
-                        },
-                        label = "bottom",
-                    ) { selecting ->
-                        if (selecting) {
-                            SelectionBar(
-                                count = selection.size,
-                                onClear = vm::clearSelection,
-                                onSelectAll = vm::selectAllVisible,
-                                onShare = { vm.share(selection) },
-                                onExtract = { requestExtract(selection) },
-                            )
-                        } else {
-                            BottomNav(tab, onSelect = goTo)
-                        }
-                    }
+            AppSnackbarHost(
+                snackbar,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    // Above the tab bar, and above the search field on the Apps tab.
+                    .padding(bottom = tabBarClearance() + if (tab == Tab.APPS && !selecting) 74.dp else 12.dp),
+            )
+
+            // Floating glass tab bar; while apps are selected it morphs into their toolbar.
+            AnimatedContent(
+                targetState = selecting,
+                transitionSpec = {
+                    (fadeIn(tween(200)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 600f), initialScale = 0.92f)) togetherWith
+                        (fadeOut(tween(120)) + scaleOut(tween(160), targetScale = 0.92f)) using SizeTransform(clip = false)
+                },
+                contentAlignment = Alignment.BottomCenter,
+                label = "bottom",
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(start = Chrome.FloatingMargin, end = Chrome.FloatingMargin, bottom = Chrome.TabBarGap),
+            ) { selectingNow ->
+                if (selectingNow) {
+                    SelectionBar(
+                        count = selection.size,
+                        hasSplit = selection.any { appsByPackage[it]?.isSplit == true },
+                        onClear = vm::clearSelection,
+                        onSelectAll = vm::selectAllVisible,
+                        onShare = { mode -> vm.share(selection, mode) },
+                        onExtract = { requestExtract(selection) },
+                    )
+                } else {
+                    GlassTabBar(tab, onSelect = goTo)
                 }
             }
         }
@@ -362,111 +384,154 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
         )
     }
 
-    if (installState !is InstallState.Idle) InstallSheet(installState, canInstall, installVm, onPickFile = pickFile)
+    // Open the sheet once the file has been read, so it slides up a single time with its final
+    // content. Only a slow read (a big bundle) shows the sheet early, with placeholders.
+    var showInstallSheet by remember { mutableStateOf(false) }
+    LaunchedEffect(installState is InstallState.Idle, installState is InstallState.Reading) {
+        showInstallSheet = when (installState) {
+            InstallState.Idle -> false
+            InstallState.Reading -> {
+                delay(SLOW_READ_MS)
+                true
+            }
+            else -> true
+        }
+    }
+    if (showInstallSheet && installState !is InstallState.Idle) {
+        InstallSheet(installState, canInstall, installVm, onPickFile = pickFile)
+    }
 
-    (task as? TaskState.Running)?.let { TaskProgressDialog(it, onCancel = vm::cancelTask) }
+    TaskProgressHost(vm.task, onCancel = vm::cancelTask)
 }
 
 // -------------------------------------------------------------------------------------------------
 // Chrome
 // -------------------------------------------------------------------------------------------------
 
-/** Slim top bar shown on every tab: the app's logo and name. The theme lives in Settings. */
-@Composable
-private fun BrandBar() {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AppLogo(size = 36.dp)
-        Spacer(Modifier.width(12.dp))
-        Text("APK Extractor", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-    }
-}
+/** How close the lens at [position] is to tab [index]: 1 on it, fading to 0 one tab away. */
+private fun closeness(position: Float, index: Int): Float = (1f - abs(position - index)).coerceIn(0f, 1f)
 
+/**
+ * The iOS 26 tab bar: a floating glass capsule. A soft "lens" sits behind the current tab and glides
+ * to a newly tapped one, and each tab's accent colour fades in as the lens arrives. It all moves in
+ * the layout / draw phases, so the bar never recomposes while animating.
+ */
 @Composable
-private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Row(
+private fun GlassTabBar(current: Tab, onSelect: (Tab) -> Unit) {
+    // The lens glides to the chosen tab on a spring; read only in layout / draw, so it never recomposes.
+    val lensPosition = animateFloatAsState(
+        current.ordinal.toFloat(),
+        spring(dampingRatio = 0.78f, stiffness = 420f),
+        label = "lens",
+    )
+    val p = iosColors
+    val accent = MaterialTheme.colorScheme.primary
+    val lens = if (p.dark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.06f)
+    BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .height(76.dp)
-            .padding(horizontal = 12.dp)
-            .selectableGroup(),
-        verticalAlignment = Alignment.CenterVertically,
+            .height(Chrome.TabBarHeight)
+            .glass(CircleShape)
+            .padding(4.dp),
     ) {
-        Tab.entries.forEach { t ->
-            val active = t == current
-            val pill by animateColorAsState(if (active) colors.primaryContainer else Color.Transparent, label = "navPill")
-            val iconTint by animateColorAsState(if (active) colors.primary else colors.onSurfaceVariant, label = "navIcon")
-            val textTint by animateColorAsState(if (active) colors.onSurface else colors.onSurfaceVariant, label = "navText")
-            val pillWidth by animateDpAsState(if (active) 60.dp else 40.dp, label = "navPillWidth")
-            Column(
-                Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .selectable(
-                        selected = active,
-                        role = Role.Tab,
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { onSelect(t) },
-                    ),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Box(
+        val itemWidth = maxWidth / Tab.entries.size
+        Box(
+            Modifier
+                .offset {
+                    val position = lensPosition.value
+                    IntOffset((position * itemWidth.toPx()).roundToInt(), 0)
+                }
+                .width(itemWidth)
+                .fillMaxHeight()
+                .clip(CircleShape)
+                .background(lens),
+        )
+        Row(Modifier.fillMaxSize().selectableGroup()) {
+            Tab.entries.forEachIndexed { i, t ->
+                val source = remember { MutableInteractionSource() }
+                Column(
                     Modifier
-                        .width(pillWidth)
-                        .height(32.dp)
-                        .clip(CircleShape)
-                        .background(pill),
-                    contentAlignment = Alignment.Center,
-                ) { Icon(t.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp)) }
-                Spacer(Modifier.height(4.dp))
-                Text(t.label, style = MaterialTheme.typography.labelMedium, color = textTint)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SelectionBar(
-    count: Int,
-    onClear: () -> Unit,
-    onSelectAll: () -> Unit,
-    onShare: () -> Unit,
-    onExtract: () -> Unit,
-) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        color = colors.surfaceContainerLowest,
-        contentColor = colors.onSurface,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(76.dp),
-    ) {
-        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClear) { Icon(Icons.Rounded.Close, contentDescription = "Clear selection") }
-            Text("$count selected", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = onSelectAll) { Icon(Icons.Rounded.SelectAll, contentDescription = "Select all") }
-            IconButton(onClick = onShare) { Icon(Icons.Rounded.Share, contentDescription = "Share") }
-            Surface(
-                onClick = onExtract,
-                shape = CircleShape,
-                color = colors.primary,
-                contentColor = colors.onPrimary,
-                modifier = Modifier.height(48.dp),
-            ) {
-                Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Extract", style = MaterialTheme.typography.labelLarge)
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .pressScale(source, pressed = 0.88f)
+                        .selectable(
+                            selected = current.ordinal == i,
+                            role = Role.Tab,
+                            interactionSource = source,
+                            indication = null,
+                            onClick = { onSelect(t) },
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    // Two copies, label colour and accent; the accent one fades with the lens.
+                    Box {
+                        Icon(t.icon, contentDescription = null, tint = p.label, modifier = Modifier.size(24.dp))
+                        Icon(
+                            t.icon,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .graphicsLayer { alpha = closeness(lensPosition.value, i) },
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Box {
+                        Text(t.label, style = TabLabel, color = p.label, maxLines = 1)
+                        Text(
+                            t.label,
+                            style = TabLabel,
+                            color = accent,
+                            maxLines = 1,
+                            modifier = Modifier.graphicsLayer { alpha = closeness(lensPosition.value, i) },
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+private val TabLabel = TextStyle(fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold)
+
+/** Glass toolbar shown instead of the tabs while apps are selected. */
+@Composable
+private fun SelectionBar(
+    count: Int,
+    hasSplit: Boolean,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
+    onShare: (SplitMode?) -> Unit,
+    onExtract: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(Chrome.TabBarHeight)
+            .glass(CircleShape)
+            .padding(start = 14.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CloseButton(onClear, description = "Clear selection")
+        Spacer(Modifier.width(12.dp))
+        // The number rolls like a counter as apps are added or removed.
+        AnimatedContent(
+            count,
+            transitionSpec = {
+                val up = targetState > initialState
+                (slideInVertically { if (up) it else -it } + fadeIn()) togetherWith
+                    (slideOutVertically { if (up) -it else it } + fadeOut())
+            },
+            label = "count",
+            modifier = Modifier.weight(1f),
+        ) { n ->
+            Text("$n selected", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+        }
+        TonalIconButton(Icons.Rounded.SelectAll, "Select all", onClick = onSelectAll, size = 40.dp)
+        Spacer(Modifier.width(8.dp))
+        ShareButton(hasSplit, onShare = onShare, size = 40.dp)
+        Spacer(Modifier.width(8.dp))
+        PrimaryButton("Extract", onClick = onExtract, icon = Icons.Rounded.Download, height = 48.dp)
     }
 }

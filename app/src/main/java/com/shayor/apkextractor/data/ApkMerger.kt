@@ -28,9 +28,10 @@ class ApkMerger(private val keyProvider: () -> SigningKey) {
 
     /**
      * @param apks base APK first, then its splits.
+     * @param onStep called as each of the [STEPS] steps starts (1-based), with a short label for it.
      * @return the signed APK inside [workDir]; the caller owns (and deletes) it.
      */
-    fun merge(apks: List<File>, workDir: File): File {
+    fun merge(apks: List<File>, workDir: File, onStep: (step: Int, label: String) -> Unit = { _, _ -> }): File {
         require(apks.isNotEmpty())
         workDir.mkdirs()
         val unsigned = File(workDir, "merged-unsigned.apk")
@@ -38,7 +39,8 @@ class ApkMerger(private val keyProvider: () -> SigningKey) {
         unsigned.delete()
         signed.delete()
         try {
-            writeMerged(apks, unsigned)
+            writeMerged(apks, unsigned, onStep)
+            onStep(4, "Signing")
             sign(unsigned, signed)
             return signed
         } catch (t: Throwable) {
@@ -49,10 +51,11 @@ class ApkMerger(private val keyProvider: () -> SigningKey) {
         }
     }
 
-    private fun writeMerged(apks: List<File>, out: File) {
+    private fun writeMerged(apks: List<File>, out: File, onStep: (Int, String) -> Unit) {
         val bundle = ApkBundle()
         try {
             apks.forEachIndexed { i, file ->
+                onStep(1, "Reading part ${i + 1} of ${apks.size}")
                 // Module names must be unique; file names are (base.apk, split_config.xx.apk).
                 val name = file.name.removeSuffix(".apk").ifEmpty { "module$i" }
                 val module = ApkModule.loadApkFile(file, name)
@@ -62,6 +65,7 @@ class ApkMerger(private val keyProvider: () -> SigningKey) {
                 if (module.hasTableBlock()) densify(module.tableBlock)
                 bundle.addModule(module)
             }
+            onStep(2, "Combining resources")
             val merged = bundle.mergeModules()
             try {
                 if (merged.hasTableBlock()) densify(merged.tableBlock)
@@ -69,6 +73,7 @@ class ApkMerger(private val keyProvider: () -> SigningKey) {
                 sanitizeManifest(merged)
                 merged.refreshTable()
                 merged.refreshManifest()
+                onStep(3, "Building APK")
                 merged.writeApk(out)
             } finally {
                 runCatching { merged.close() }
@@ -173,7 +178,10 @@ class ApkMerger(private val keyProvider: () -> SigningKey) {
             .sign()
     }
 
-    private companion object {
-        val SIGNATURE_FILES: Pattern = Pattern.compile("^META-INF/.+\\.(MF|SF|RSA|DSA|EC)$", Pattern.CASE_INSENSITIVE)
+    companion object {
+        /** Number of steps reported through `merge(onStep = …)`. */
+        const val STEPS = 4
+
+        private val SIGNATURE_FILES: Pattern = Pattern.compile("^META-INF/.+\\.(MF|SF|RSA|DSA|EC)$", Pattern.CASE_INSENSITIVE)
     }
 }

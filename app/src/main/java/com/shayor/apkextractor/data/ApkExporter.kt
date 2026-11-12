@@ -38,6 +38,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.min
 
+/** A step of work that has no byte progress, such as merging a split app ([step] of [steps], 1-based). */
+data class ExportStage(val label: String, val step: Int, val steps: Int)
+
 /**
  * Copies an app's APK (or a split-APK bundle) to user storage.
  *
@@ -60,7 +63,7 @@ class ApkExporter(context: Context) {
     suspend fun exportToStorage(
         app: AppInfo,
         settings: Settings,
-        onStage: (String?) -> Unit,
+        onStage: (ExportStage?) -> Unit,
         onProgress: (Long) -> Unit,
     ): ExportedFile = withPreparedSources(app, settings, onStage) { sources ->
         val name = FileNames.build(app, settings.nameFormat, sources.extension)
@@ -95,7 +98,7 @@ class ApkExporter(context: Context) {
         app: AppInfo,
         settings: Settings,
         dir: File,
-        onStage: (String?) -> Unit,
+        onStage: (ExportStage?) -> Unit,
         onProgress: (Long) -> Unit,
     ): ExportedFile = withPreparedSources(app, settings, onStage) { sources ->
         ensureSpace(dir, sources.totalBytes)
@@ -157,7 +160,7 @@ class ApkExporter(context: Context) {
     private suspend fun <T> withPreparedSources(
         app: AppInfo,
         settings: Settings,
-        onStage: (String?) -> Unit,
+        onStage: (ExportStage?) -> Unit,
         block: suspend (Sources) -> T,
     ): T = withContext(Dispatchers.IO) {
         val raw = resolveSources(app.packageName, includeSplits = settings.splitMode != SplitMode.BASE_ONLY)
@@ -167,9 +170,10 @@ class ApkExporter(context: Context) {
         ensureSpace(context.cacheDir, raw.totalBytes * 2)
         val work = File(mergeRoot, System.nanoTime().toString())
         try {
-            onStage("Merging…")
             val merged = try {
-                runInterruptible { merger.merge(raw.all, work) }
+                runInterruptible {
+                    merger.merge(raw.all, work) { step, label -> onStage(ExportStage(label, step, ApkMerger.STEPS)) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: OutOfMemoryError) {
