@@ -18,9 +18,9 @@ android {
         applicationId = "com.shayor.apkextractor"
         minSdk = 24
         targetSdk = 37
-        versionCode = 3
+        versionCode = 4
 
-        versionName = "1.5.0"
+        versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

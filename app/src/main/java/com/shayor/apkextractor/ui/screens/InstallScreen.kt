@@ -56,12 +56,32 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -88,6 +108,7 @@ import com.shayor.apkextractor.ui.components.GlassTopBar
 import com.shayor.apkextractor.ui.components.GroupShape
 import com.shayor.apkextractor.ui.components.IconTile
 import com.shayor.apkextractor.ui.components.IosSheet
+import com.shayor.apkextractor.ui.components.rememberIosSheetState
 import com.shayor.apkextractor.ui.components.PillButton
 import com.shayor.apkextractor.ui.components.SectionHeader
 import com.shayor.apkextractor.ui.components.cellColor
@@ -294,8 +315,7 @@ private fun BackupRow(entry: HistoryEntry, first: Boolean, last: Boolean, onInst
 @Composable
 fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel, onPickFile: () -> Unit) {
     val busy = state is InstallState.Installing
-    val sheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = true,
+    val sheetState = rememberIosSheetState(
         confirmValueChange = { it != SheetValue.Hidden || vm.state.value !is InstallState.Installing },
     )
     IosSheet(onDismiss = { if (!busy) vm.dismiss() }, sheetState = sheetState) {
@@ -308,18 +328,20 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             SheetIcon(state)
-            Spacer(Modifier.height(16.dp))
-            // Fixed heights from here down, so the sheet never resizes between states (a resize
-            // during its slide-in made it stop and jump).
+            Spacer(Modifier.height(12.dp))
+            // The same height in every state, so the sheet never resizes (a resize during its
+            // slide-in made it stop and jump). Each area reserves room for its tallest content with
+            // an invisible copy of it, so it fits at any font size, display size or language.
+            ReserveHeight(reserve = { TitleReserve() }) {
             AnimatedContent(
                 ui.title to ui.subtitle,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                 contentAlignment = Alignment.Center,
                 label = "title",
-                modifier = Modifier.height(84.dp),
+                modifier = Modifier.fillMaxSize(),
             ) { (title, subtitle) ->
                 Column(
-                    Modifier.fillMaxHeight(),
+                    Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -330,7 +352,7 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
                     } else {
                         Text(
                             title,
-                            style = MaterialTheme.typography.headlineSmall,
+                            style = MaterialTheme.typography.titleLarge,
                             textAlign = TextAlign.Center,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -338,7 +360,7 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
                         Spacer(Modifier.height(4.dp))
                         Text(
                             subtitle.orEmpty(),
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
                             maxLines = 1,
@@ -347,8 +369,26 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            Box(Modifier.height(58.dp), contentAlignment = Alignment.Center) { StatusLine(ui.status, ui.tone) }
+            }
+            Spacer(Modifier.height(8.dp))
+            // What this file is: its facts, how it compares with the installed app, or a status.
+            ReserveHeight(reserve = { CompareReserve() }) {
+                AnimatedContent(
+                    ui.detail,
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    contentAlignment = Alignment.Center,
+                    label = "detail",
+                    modifier = Modifier.fillMaxSize(),
+                ) { detail ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        when (detail) {
+                            is Detail.Status -> StatusLine(detail.text, detail.tone)
+                            is Detail.Facts -> FactsRow(detail.pkg)
+                            is Detail.Compare -> VersionCompare(detail.pkg)
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(16.dp))
             MorphButton(ui.button, ui.onClick, ui.progress, ui.busy)
             // Fixed-height footer so the sheet never changes size between states.
@@ -357,7 +397,7 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
                 if (footer != null) {
                     Text(
                         footer.first,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
                             .clip(CircleShape)
@@ -377,14 +417,29 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
     }
 }
 
+/** Where an app hidden from us usually lives, and what to do about it. */
+private const val HiddenCopyHint = "Remove it from Secure Folder or the other user first."
+
 private enum class Tone { Neutral, Accent, Success, Warning }
+
+/** The middle of the sheet. */
+private sealed interface Detail {
+    data class Status(val text: String, val tone: Tone) : Detail
+    /** A new app: version, size and the Android it needs. */
+    data class Facts(val pkg: PackageToInstall) : Detail
+    /** Already on the phone: installed version → this file's. */
+    data class Compare(val pkg: PackageToInstall) : Detail
+}
+
+/** Facts for a new app, the comparison for one that is already installed. */
+private fun overview(pkg: PackageToInstall): Detail =
+    if (pkg.isInstalled && !pkg.installedElsewhere) Detail.Compare(pkg) else Detail.Facts(pkg)
 
 /** Everything the sheet shows for one state. */
 private class SheetUi(
     val title: String?,
     val subtitle: String?,
-    val status: String,
-    val tone: Tone,
+    val detail: Detail,
     val button: String,
     val onClick: (() -> Unit)?,
     val progress: Float? = null,
@@ -395,63 +450,72 @@ private class SheetUi(
 
 @Composable
 private fun describe(state: InstallState, canInstall: Boolean, vm: InstallViewModel, onPickFile: () -> Unit): SheetUi {
-    fun subtitleOf(pkg: PackageToInstall, size: String) = "${versionLabel(pkg.versionName).take(20)}  ·  $size"
+    fun warn(text: String) = Detail.Status(text, Tone.Warning)
     return when (state) {
         InstallState.Idle, InstallState.Reading -> SheetUi(
             title = null, subtitle = null,
-            status = "Reading file", tone = Tone.Neutral,
+            Detail.Status("Reading file", Tone.Neutral),
             button = "Reading…", onClick = null, busy = true,
         )
         is InstallState.Ready -> {
             val pkg = state.pkg
-            val size = rememberFileSize(pkg.totalBytes)
-            val parts = if (pkg.isBundle) "  ·  ${pkg.files.size} parts" else ""
             when {
                 pkg.needsNewerAndroid -> SheetUi(
-                    pkg.label, subtitleOf(pkg, size),
-                    "Needs Android ${androidName(pkg.minSdk)} or newer", Tone.Warning,
+                    pkg.label, pkg.packageName,
+                    warn("Needs Android ${androidName(pkg.minSdk)} or newer"),
                     "Close", vm::dismiss,
                 )
+                // Not installed for this user, but Android still keeps a copy (another profile such
+                // as Secure Folder or Dual Messenger, or data kept on uninstall) that blocks it.
+                pkg.installedElsewhere && (!pkg.signatureMatches || pkg.isDowngrade) -> SheetUi(
+                    pkg.label, pkg.packageName,
+                    warn(if (!pkg.signatureMatches) "Blocked by a hidden copy" else "A newer copy is on this phone"),
+                    // Android's uninstall prompt can't reach a copy in another user or profile, so
+                    // say where to remove it instead, then let them try again here.
+                    "Try again", vm::install,
+                    caption = HiddenCopyHint,
+                )
                 pkg.isInstalled && !pkg.signatureMatches -> SheetUi(
-                    pkg.label, subtitleOf(pkg, size),
-                    "Signed differently from the installed app", Tone.Warning,
+                    pkg.label, pkg.packageName,
+                    warn("Different signature"),
                     "Uninstall current version", vm::uninstallInstalled,
-                    caption = "Then come back to install this one.",
+                    caption = "Then install this one.",
                 )
+                // Older than installed: the comparison says it all; Android won't downgrade.
                 pkg.isDowngrade -> SheetUi(
-                    pkg.label, subtitleOf(pkg, size),
-                    "Older than installed ${versionLabel(pkg.installedVersionName.orEmpty()).take(14)}", Tone.Warning,
+                    pkg.label, pkg.packageName,
+                    overview(pkg),
                     "Uninstall current version", vm::uninstallInstalled,
-                    caption = "Then come back to install this one.",
+                    caption = "Android can't downgrade apps.",
                 )
-                else -> {
-                    val (status, action) = when {
-                        !pkg.isInstalled -> "New app$parts" to "Install"
-                        pkg.versionCode == pkg.installedVersionCode -> "Already installed$parts" to "Reinstall"
-                        else -> "Update from ${versionLabel(pkg.installedVersionName.orEmpty()).take(14)}$parts" to "Update"
-                    }
-                    SheetUi(
-                        pkg.label, subtitleOf(pkg, size), status, Tone.Accent, action, vm::install,
-                        caption = if (canInstall) null else "Android will ask you to allow installs once.",
-                    )
-                }
+                else -> SheetUi(
+                    pkg.label, pkg.packageName,
+                    overview(pkg),
+                    when {
+                        !pkg.isInstalled || pkg.installedElsewhere -> "Install"
+                        pkg.versionCode == pkg.installedVersionCode -> "Reinstall"
+                        else -> "Update"
+                    },
+                    vm::install,
+                    caption = if (canInstall) null else "You'll be asked to allow installs once.",
+                )
             }
         }
         is InstallState.Installing -> {
             val pkg = state.pkg
-            val size = rememberFileSize(pkg.totalBytes)
             if (state.waitingForUser) {
                 SheetUi(
-                    pkg.label, subtitleOf(pkg, size),
-                    "Waiting for your confirmation", Tone.Neutral,
+                    pkg.label, pkg.packageName,
+                    Detail.Status("Waiting for confirmation", Tone.Neutral),
                     "Confirm install", vm::showPromptAgain,
                     footer = "Cancel" to vm::cancelInstall,
                 )
             } else {
+                // The button shows the progress; the details stay as they were.
                 val p = state.progress
                 SheetUi(
-                    pkg.label, subtitleOf(pkg, size),
-                    "Installing", Tone.Accent,
+                    pkg.label, pkg.packageName,
+                    overview(pkg),
                     if (p != null) "Installing  ${(p * 100).toInt()}%" else "Installing…", null,
                     progress = p, busy = true,
                 )
@@ -459,10 +523,17 @@ private fun describe(state: InstallState, canInstall: Boolean, vm: InstallViewMo
         }
         is InstallState.Done -> {
             val pkg = state.pkg
-            val size = rememberFileSize(pkg.totalBytes)
             SheetUi(
-                pkg.label, subtitleOf(pkg, size),
-                "Installed", Tone.Success,
+                pkg.label, pkg.packageName,
+                Detail.Status(
+                    when {
+                        // pkg still describes what was on the phone before this install.
+                        !pkg.isInstalled || pkg.installedElsewhere -> "Installed"
+                        pkg.versionCode == pkg.installedVersionCode -> "Reinstalled"
+                        else -> "Updated to ${versionLabel(pkg.versionName).take(18)}"
+                    },
+                    Tone.Success,
+                ),
                 if (state.canOpen) "Open" else "Done",
                 if (state.canOpen) vm::openInstalled else vm::dismiss,
                 footer = if (state.canOpen) "Done" to vm::dismiss else null,
@@ -470,17 +541,28 @@ private fun describe(state: InstallState, canInstall: Boolean, vm: InstallViewMo
         }
         is InstallState.Failed -> {
             val pkg = state.pkg
-            if (pkg != null) {
+            if (pkg != null && state.conflict) {
+                val visible = pkg.isInstalled && !pkg.installedElsewhere
                 SheetUi(
-                    pkg.label, subtitleOf(pkg, rememberFileSize(pkg.totalBytes)),
-                    state.message, Tone.Warning,
+                    pkg.label, pkg.packageName,
+                    warn(state.message),
+                    // Installed normally: Android's uninstall prompt removes it. Otherwise the copy
+                    // is in another user or profile, out of our reach: explain where to remove it.
+                    if (visible) "Uninstall current version" else "Try again",
+                    if (visible) vm::uninstallInstalled else vm::retry,
+                    caption = if (visible) "Then install this one." else HiddenCopyHint,
+                )
+            } else if (pkg != null) {
+                SheetUi(
+                    pkg.label, pkg.packageName,
+                    warn(state.message),
                     "Try again", vm::retry,
                     footer = "Close" to vm::dismiss,
                 )
             } else {
                 SheetUi(
                     "Couldn't read this file", "Make sure it's an APK or APK bundle",
-                    state.message, Tone.Warning,
+                    warn(state.message),
                     "Choose another file", { vm.dismiss(); onPickFile() },
                     footer = "Close" to vm::dismiss,
                 )
@@ -500,19 +582,19 @@ private fun SheetIcon(state: InstallState) {
         is InstallState.Failed -> state.pkg
         else -> null
     }
-    Box(Modifier.size(80.dp)) {
+    Box(Modifier.size(64.dp)) {
         val icon = pkg?.icon
         when {
             icon != null -> Image(icon, contentDescription = null, modifier = Modifier.fillMaxSize())
             state is InstallState.Failed -> Box(
-                Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(colors.errorContainer),
+                Modifier.fillMaxSize().clip(RoundedCornerShape(19.dp)).background(colors.errorContainer),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.onErrorContainer, modifier = Modifier.size(34.dp)) }
+            ) { Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.onErrorContainer, modifier = Modifier.size(28.dp)) }
             pkg != null -> Box(
-                Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(colors.surfaceContainerHigh),
+                Modifier.fillMaxSize().clip(RoundedCornerShape(19.dp)).background(colors.surfaceContainerHigh),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.Android, contentDescription = null, modifier = Modifier.size(34.dp)) }
-            else -> Placeholder(80.dp, 80.dp, RoundedCornerShape(24.dp))
+            ) { Icon(Icons.Rounded.Android, contentDescription = null, modifier = Modifier.size(28.dp)) }
+            else -> Placeholder(64.dp, 64.dp, RoundedCornerShape(19.dp))
         }
         androidx.compose.animation.AnimatedVisibility(
             visible = state is InstallState.Done,
@@ -522,15 +604,239 @@ private fun SheetIcon(state: InstallState) {
         ) {
             Box(
                 Modifier
-                    .size(28.dp)
+                    .size(24.dp)
                     .clip(CircleShape)
                     .background(iosColors.sheet)
                     .padding(3.dp)
                     .clip(CircleShape)
                     .background(iosColors.green),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp)) }
+            ) { Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp)) }
         }
+    }
+}
+
+/**
+ * Lays out [reserve] invisibly to take its size, and draws [content] centred over it. The area is
+ * then exactly as tall as its tallest state at the current font size, and the same in every state.
+ */
+@Composable
+private fun ReserveHeight(reserve: @Composable () -> Unit, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(Modifier.alpha(0f).clearAndSetSemantics {}) { reserve() }
+        Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) { content() }
+    }
+}
+
+/** The tallest title: a name on two lines, then the package name. */
+@Composable
+private fun TitleReserve() {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text("", style = MaterialTheme.typography.titleLarge, minLines = 2)
+        Spacer(Modifier.height(4.dp))
+        Text("", style = MaterialTheme.typography.bodySmall, minLines = 1)
+    }
+}
+
+/** The tallest detail: a version change stacked for long versions. */
+@Composable
+private fun CompareReserve() {
+    VersionsStacked(AnnotatedString("1"), AnnotatedString("1"), "1", iosColors.label)
+}
+
+/** A new app at a glance, like the facts row on an App Store page: version, size, Android. */
+@Composable
+private fun FactsRow(pkg: PackageToInstall) {
+    // Same surface as the comparison (an inset group), so the sheet looks alike in every state.
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(GroupShape)
+            .background(cellColor())
+            .padding(vertical = 12.dp)
+            .height(IntrinsicSize.Min),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // The version gets the most room: some are long ("26.43.30 (260400-1006944126)").
+        Fact("Version", versionLabel(pkg.versionName), Modifier.weight(1.5f))
+        FactDivider()
+        Fact("Size", rememberFileSize(pkg.totalBytes), Modifier.weight(1f))
+        FactDivider()
+        Fact("Requires", "Android ${androidName(pkg.minSdk)}+", Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun Fact(label: String, value: String, modifier: Modifier = Modifier) {
+    val p = iosColors
+    Column(
+        modifier
+            .padding(horizontal = 8.dp)
+            .semantics(mergeDescendants = true) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = p.secondaryLabel, maxLines = 1)
+        Spacer(Modifier.height(2.dp))
+        FitText(value, MaterialTheme.typography.titleSmall.copy(color = p.label, textAlign = TextAlign.Center))
+    }
+}
+
+/** One line that shrinks (down to 10sp) to fit whole rather than being cut off. */
+@Composable
+private fun FitText(text: String, style: TextStyle, modifier: Modifier = Modifier) =
+    FitText(AnnotatedString(text), style, modifier)
+
+@Composable
+private fun FitText(text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier) {
+    BasicText(
+        text,
+        modifier = modifier,
+        style = style,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis, // only if even 10sp isn't enough
+        autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = style.fontSize, stepSize = 0.5.sp),
+    )
+}
+
+@Composable
+private fun FactDivider() {
+    Box(
+        Modifier
+            .fillMaxHeight(0.7f)
+            .width(0.5.dp)
+            .background(iosColors.separator),
+    )
+}
+
+/**
+ * The installed version and this file's, set as type in the centre of the sheet (no box), like the
+ * icon and title above: "v1.5.0 → v1.5.1", or stacked with a down arrow when the two don't fit
+ * side by side. Only the part that differs is highlighted (accent for an update, orange for an
+ * older version), and one caption names the change ("Minor update"). The same version shows once.
+ */
+@Composable
+private fun VersionCompare(pkg: PackageToInstall) {
+    val p = iosColors
+    val installedCode = pkg.installedVersionCode ?: return
+    val fromName = versionLabel(pkg.installedVersionName.orEmpty().ifBlank { installedCode.toString() })
+    val toName = versionLabel(pkg.versionName)
+    if (pkg.versionCode == installedCode) {
+        VersionSame(toName)
+        return
+    }
+    val newer = pkg.versionCode > installedCode
+    val tint = if (newer) MaterialTheme.colorScheme.primary else p.orange
+    val caption = changeCaption(fromName, toName, newer)
+
+    // Shared start muted, the changed rest emphasised (the old version stays muted throughout).
+    val split = changedFrom(fromName, toName)
+    val muted = SpanStyle(color = p.secondaryLabel)
+    val from = buildAnnotatedString { withStyle(muted) { append(fromName) } }
+    val to = buildAnnotatedString {
+        withStyle(muted) { append(toName.take(split)) }
+        withStyle(SpanStyle(color = tint)) { append(toName.drop(split)) }
+    }
+
+    val style = VersionStyle
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // Side by side only if both versions fit on one line; else stack them.
+        val needed = with(LocalDensity.current) {
+            (measurer.measure(from, style).size.width + measurer.measure(to, style).size.width).toDp()
+        } + ArrowSize + ArrowGap * 2
+        if (needed <= maxWidth) {
+            Column(
+                Modifier.semantics(mergeDescendants = true) {},
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(from, style = style, maxLines = 1)
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowForward,
+                        contentDescription = "to",
+                        tint = tint,
+                        modifier = Modifier
+                            .padding(horizontal = ArrowGap)
+                            .size(ArrowSize),
+                    )
+                    Text(to, style = style, maxLines = 1)
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(caption, style = CaptionStyle, color = p.secondaryLabel, maxLines = 1)
+            }
+        } else {
+            VersionsStacked(from, to, caption, tint)
+        }
+    }
+}
+
+private val VersionStyle @Composable get() = MaterialTheme.typography.titleMedium
+private val CaptionStyle @Composable get() = MaterialTheme.typography.labelMedium
+private val ArrowSize = 16.dp
+private val ArrowGap = 12.dp
+
+/** Where [to] starts to differ from [from], moved back to the start of that number. */
+private fun changedFrom(from: String, to: String): Int {
+    var i = 0
+    while (i < from.length && i < to.length && from[i] == to[i]) i++
+    if (i >= to.length) return 0 // nothing new at the end (e.g. "1.5.1" -> "1.5"): highlight it all
+    // A change inside a number ("1.5.9" -> "1.5.10") highlights the whole number (digits only, so
+    // a leading "v" stays muted); one that starts a new part ("1.5" -> "1.5.1") just the new part.
+    val midToken = i < from.length && from[i].isDigit() && to[i].isDigit()
+    if (midToken || (i > 0 && to[i - 1].isDigit() && to[i].isDigit())) {
+        while (i > 0 && to[i - 1].isDigit()) i--
+    }
+    return i
+}
+
+/** "Major update" / "Minor update" / "Patch update" from the first number that changed. */
+private fun changeCaption(from: String, to: String, newer: Boolean): String {
+    if (from == to) return if (newer) "New build" else "Older build"
+    if (!newer) return "Older version"
+    val a = Regex("\\d+").findAll(from).map { it.value }.toList()
+    val b = Regex("\\d+").findAll(to).map { it.value }.toList()
+    // A missing number counts as a change there ("1.5" -> "1.5.1" is a patch).
+    val first = (0 until maxOf(a.size, b.size)).firstOrNull { a.getOrNull(it) != b.getOrNull(it) } ?: return "Newer version"
+    return when (first) {
+        0 -> "Major update"
+        1 -> "Minor update"
+        else -> "Patch update"
+    }
+}
+
+/** Long versions: installed above, this file below, each on a full line, then the caption. */
+@Composable
+private fun VersionsStacked(from: AnnotatedString, to: AnnotatedString, caption: String, tint: Color) {
+    val p = iosColors
+    val center = VersionStyle.copy(textAlign = TextAlign.Center)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        FitText(from, center, Modifier.fillMaxWidth())
+        Icon(
+            Icons.Rounded.ArrowDownward,
+            contentDescription = "to",
+            tint = tint,
+            modifier = Modifier
+                .padding(vertical = 2.dp)
+                .size(16.dp),
+        )
+        FitText(to, center, Modifier.fillMaxWidth())
+        Spacer(Modifier.height(2.dp))
+        Text(caption, style = CaptionStyle, color = p.secondaryLabel, maxLines = 1)
+    }
+}
+
+/** Already installed in this exact version: show it once. */
+@Composable
+private fun VersionSame(version: String) {
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        FitText(version, VersionStyle.copy(color = iosColors.label, textAlign = TextAlign.Center), Modifier.fillMaxWidth())
+        Spacer(Modifier.height(2.dp))
+        Text("Already installed", style = CaptionStyle, color = iosColors.secondaryLabel, maxLines = 1)
     }
 }
 
@@ -544,17 +850,30 @@ private fun StatusLine(text: String, tone: Tone) {
         Tone.Success -> p.green to p.green
         Tone.Warning -> p.orange to p.orange
     }
+    val style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium)
+    val lineHeight = with(LocalDensity.current) { style.lineHeight.toDp() }
     AnimatedContent(text to tone, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "status") { (t, _) ->
+        // One line: a pill with the dot beside the text. Two lines: a rounded card (a pill that
+        // tall reads as a blob), the dot level with the first line and the text in one block.
         Row(
             Modifier
-                .clip(CircleShape)
+                .clip(RoundedCornerShape(18.dp))
                 .background(p.tertiaryFill)
                 .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(dot))
+            Box(Modifier.height(lineHeight), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(dot))
+            }
             Spacer(Modifier.width(8.dp))
-            Text(t, style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 2, textAlign = TextAlign.Center)
+            Text(
+                t,
+                style = style,
+                color = fg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(IntrinsicSize.Max),
+            )
         }
     }
 }
@@ -587,7 +906,7 @@ private fun MorphButton(label: String, onClick: (() -> Unit)?, progress: Float?,
     Box(
         Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .height(50.dp)
             .pressScale(source)
             .clip(CircleShape)
             .background(container)

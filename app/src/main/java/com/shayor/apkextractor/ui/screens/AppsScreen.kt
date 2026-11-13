@@ -59,6 +59,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Android
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material.icons.rounded.ArrowDownward
@@ -193,6 +194,7 @@ fun AppsScreen(
     val selection by vm.selection.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
+    val autoBackupApps by vm.autoBackupApps.collectAsStateWithLifecycle()
 
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
@@ -387,6 +389,7 @@ fun AppsScreen(
                                 last = i == state.apps.lastIndex,
                                 sortBy = settings.sortBy,
                                 selected = app.packageName in selection,
+                                autoBackup = app.packageName in autoBackupApps,
                                 selectionMode = inSelection,
                                 query = state.query,
                                 onShare = { onShare(app.packageName) },
@@ -738,6 +741,8 @@ private fun AppRow(
     first: Boolean,
     last: Boolean,
     selected: Boolean,
+    /** Auto-backup is on: a small green arrow after the version, as in Settings. */
+    autoBackup: Boolean,
     selectionMode: Boolean,
     query: String,
     onClick: () -> Unit,
@@ -885,6 +890,15 @@ private fun AppRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
+                    if (autoBackup) {
+                        Spacer(Modifier.width(5.dp))
+                        Icon(
+                            Icons.Rounded.Autorenew,
+                            contentDescription = "Auto-backup on",
+                            tint = p.green,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
                     // Only split apps are tagged; a plain APK is the norm and needs no label.
                     if (app.isSplit) {
                         Spacer(Modifier.width(6.dp))

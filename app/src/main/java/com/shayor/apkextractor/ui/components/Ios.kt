@@ -46,9 +46,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -67,7 +68,14 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -404,6 +412,53 @@ fun SwitchCell(
 // -------------------------------------------------------------------------------------------------
 
 /**
+ * State for an [IosSheet]. Material's defaults close the sheet after a 56dp pull or the faintest
+ * downward flick; here the sheet has to be pulled about a third of its height, or flicked down
+ * with intent, before it lets go. A shorter pull springs back.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun rememberIosSheetState(confirmValueChange: (SheetValue) -> Boolean = { true }): SheetState {
+    val density = LocalDensity.current
+    // The sheet's measured height (set by IosSheet), read when a drag ends.
+    val sheetHeight = remember { floatArrayOf(0f) }
+    val positionalThreshold = {
+        maxOf(sheetHeight[0] * DismissFraction, with(density) { MinDismissDistance.toPx() })
+    }
+    val velocityThreshold = { with(density) { DismissVelocity.toPx() } }
+    val state = rememberSaveable(
+        saver = SheetState.Saver(
+            skipPartiallyExpanded = true,
+            positionalThreshold = positionalThreshold,
+            velocityThreshold = velocityThreshold,
+            confirmValueChange = confirmValueChange,
+            skipHiddenState = false,
+        ),
+    ) {
+        SheetState(
+            skipPartiallyExpanded = true,
+            positionalThreshold = positionalThreshold,
+            velocityThreshold = velocityThreshold,
+            initialValue = SheetValue.Hidden,
+            confirmValueChange = confirmValueChange,
+        )
+    }
+    DisposableEffect(state) {
+        sheetHeights[state] = sheetHeight
+        onDispose { sheetHeights.remove(state) }
+    }
+    return state
+}
+
+private const val DismissFraction = 0.35f
+private val MinDismissDistance = 96.dp
+private val DismissVelocity = 1100.dp // per second
+
+/** Lets [IosSheet] report its height to the dismiss threshold of the state it was given. */
+@OptIn(ExperimentalMaterial3Api::class)
+private val sheetHeights = java.util.WeakHashMap<SheetState, FloatArray>()
+
+/**
  * An iOS sheet: large rounded top corners, a grabber, the grouped background, and rows one step
  * lighter so groups stand out. Never taller than ~90% of the screen, so it reads as a sheet.
  */
@@ -411,11 +466,24 @@ fun SwitchCell(
 @Composable
 fun IosSheet(
     onDismiss: () -> Unit,
-    sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    sheetState: SheetState = rememberIosSheetState(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val p = iosColors
-    val maxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.9f
+    val density = LocalDensity.current
+    // Size the sheet from the real window, keeping it clear of the status bar. (With targetSdk 35+
+    // Configuration.screenHeightDp includes the system bars, so 90% of it plus the nav bar pushed
+    // tall sheets up under the status bar.) Once a sheet overlaps the status bar, Material pads its
+    // top by the overlap, which changes its height, which moves its resting position, which changes
+    // the overlap again: the sheet bounced up and down while dragged.
+    val windowHeight = LocalWindowInfo.current.containerSize.height
+    val topInset = WindowInsets.safeDrawing.getTop(density)
+    val bottomInset = WindowInsets.safeDrawing.getBottom(density)
+    val maxHeight = with(density) {
+        val room = windowHeight - topInset - bottomInset -
+            SheetTopGap.roundToPx() - GrabberHeight.roundToPx()
+        minOf(room, (windowHeight * 0.9f).toInt()).coerceAtLeast(0).toDp()
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -424,12 +492,24 @@ fun IosSheet(
         shape = RoundedCornerShape(topStart = 34.dp, topEnd = 34.dp),
         scrimColor = Color.Black.copy(alpha = if (p.dark) 0.55f else 0.28f),
         dragHandle = { Grabber() },
+        // Bottom only: the sheet never reaches the status bar, and a top inset that depends on the
+        // sheet's offset is what made it bounce.
+        contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
     ) {
         CompositionLocalProvider(LocalCellColor provides p.elevatedCell) {
-            Column(Modifier.heightIn(max = maxHeight), content = content)
+            Column(
+                Modifier
+                    .heightIn(max = maxHeight)
+                    .onSizeChanged { sheetHeights[sheetState]?.set(0, it.height.toFloat()) },
+                content = content,
+            )
         }
     }
 }
+
+/** Space left between the status bar and the tallest sheet, so the screen behind still shows. */
+private val SheetTopGap = 24.dp
+private val GrabberHeight = 15.dp
 
 @Composable
 private fun Grabber() {
@@ -596,28 +676,53 @@ fun ShareButton(
             onClick = { if (hasSplit) open = true else onShare(null) },
             size = size,
         )
-        IosMenu(open, onDismiss = { open = false }, title = "Share Split Apps As") {
-            IosMenuItem(
-                "Single APK",
-                onClick = {
-                    open = false
-                    onShare(SplitMode.MERGE)
-                },
-                icon = Icons.Rounded.Android,
-                subtitle = "One file that installs anywhere",
-                checkColumn = false,
-                divider = false,
-            )
-            IosMenuItem(
-                "APKS Bundle",
-                onClick = {
-                    open = false
-                    onShare(SplitMode.BUNDLE)
-                },
-                icon = Icons.Rounded.Layers,
-                subtitle = "Original parts and signature",
-                checkColumn = false,
-            )
-        }
+        SplitFormatMenu(
+            open,
+            onDismiss = { open = false },
+            title = "Share Split Apps As",
+            onPick = { mode ->
+                open = false
+                onShare(mode)
+            },
+        )
+    }
+}
+
+/**
+ * Asks how split apps should be saved: one merged APK, or the original parts as an .apks bundle.
+ * Apps that are a single APK are always saved as .apk, whichever is picked. When [default] is
+ * given, it is ticked (the choice from Settings).
+ */
+@Composable
+fun SplitFormatMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    title: String,
+    onPick: (SplitMode) -> Unit,
+    default: SplitMode? = null,
+) {
+    IosMenu(
+        expanded,
+        onDismiss = onDismiss,
+        title = title,
+        footer = "Apps that aren't split are always saved as a single APK.",
+    ) {
+        IosMenuItem(
+            "Single APK",
+            onClick = { onPick(SplitMode.MERGE) },
+            icon = Icons.Rounded.Android,
+            subtitle = "One file that installs anywhere",
+            checked = default == SplitMode.MERGE,
+            checkColumn = default != null,
+            divider = false,
+        )
+        IosMenuItem(
+            "APKS Bundle",
+            onClick = { onPick(SplitMode.BUNDLE) },
+            icon = Icons.Rounded.Layers,
+            subtitle = "Original parts and signature",
+            checked = default == SplitMode.BUNDLE,
+            checkColumn = default != null,
+        )
     }
 }

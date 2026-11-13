@@ -122,7 +122,7 @@ private fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
  * swipe starting from the top moves the sheet.
  */
 @Composable
-private fun Modifier.sheetScroll(state: ScrollState): Modifier {
+internal fun Modifier.sheetScroll(state: ScrollState): Modifier {
     val guard = remember(state) { SheetScrollGuard() }
     return this
         .pointerInput(guard) {
@@ -143,8 +143,15 @@ private class SheetScrollGuard : NestedScrollConnection {
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
         if (startedScrolled && available.y > 0f) Offset(0f, available.y) else Offset.Zero
 
+    /**
+     * Keeps a fling's leftover speed from the sheet, unless it's a downward flick that started at the
+     * top (that one closes or settles the sheet, as expected). Otherwise Material hands the sheet the
+     * speed left when the content hits its end: the sheet, already open, springs up past its top and
+     * back, and while that spring runs it grabs the next touch, so a swipe down to scroll back up
+     * dragged the whole sheet down instead.
+     */
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
-        if (startedScrolled && available.y > 0f) Velocity(0f, available.y) else Velocity.Zero
+        if (!startedScrolled && available.y > 0f) Velocity.Zero else available
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -156,11 +163,15 @@ fun AppDetailsSheet(
     app: AppInfo,
     splitMode: SplitMode,
     autoBackup: Boolean,
+    /** The format this app's auto-backups use, if it has its own (split apps). */
+    backupFormat: SplitMode?,
     saveLocation: String,
     onDismiss: () -> Unit,
     onExtract: (SplitMode) -> Unit,
     onShare: (SplitMode) -> Unit,
-    onAutoBackupChange: (Boolean) -> Unit,
+    /** On/off, with the Save As choice to back a split app up in (null for other apps). */
+    onAutoBackupChange: (Boolean, SplitMode?) -> Unit,
+    onBackupFormatChange: (SplitMode) -> Unit,
 ) {
     val context = LocalContext.current
     val p = iosColors
@@ -168,9 +179,11 @@ fun AppDetailsSheet(
     val details by produceState<AppDetails?>(null, app.packageName, app.lastUpdateTime) {
         value = AppDetailsLoader.load(context, app)
     }
-    // Split apps can be saved either way; start from the default chosen in Settings.
+    // Split apps can be saved either way. Start from the format this app is backed up in, if it is,
+    // else from the default chosen in Settings. With auto-backup on, Save As also sets its format.
     var format by rememberSaveable(app.packageName) {
-        mutableStateOf(if (splitMode == SplitMode.BUNDLE) SplitMode.BUNDLE else SplitMode.MERGE)
+        val start = backupFormat.takeIf { autoBackup } ?: splitMode
+        mutableStateOf(if (start == SplitMode.BUNDLE) SplitMode.BUNDLE else SplitMode.MERGE)
     }
     val mode = if (app.isSplit) format else splitMode
     val launchIntent = remember(app.packageName, app.lastUpdateTime) {
@@ -242,16 +255,26 @@ fun AppDetailsSheet(
                 QuickAction("Store", Icons.Rounded.Shop, onClick = { openStore(context, app.packageName) }, modifier = Modifier.weight(1f))
             }
 
-            if (app.isSplit) FormatPicker(format, onSelect = { format = it })
+            if (app.isSplit) {
+                FormatPicker(format, onSelect = {
+                    format = it
+                    if (autoBackup) onBackupFormatChange(it)
+                })
+            }
 
             SectionHeader("Backup")
             InsetGroup {
                 SwitchCell(
                     "Auto-Backup Updates",
                     autoBackup,
-                    onAutoBackupChange,
+                    { on -> onAutoBackupChange(on, if (app.isSplit) format else null) },
                     icon = { IconTile(Icons.Rounded.Autorenew, p.green) },
-                    subtitle = "Save each new version to $saveLocation",
+                    // Split apps: say which format, so the link with Save As above is plain to see.
+                    subtitle = when {
+                        !app.isSplit -> "Save each new version to $saveLocation"
+                        format == SplitMode.BUNDLE -> "Save each new version as an APKS bundle to $saveLocation"
+                        else -> "Save each new version as a single APK to $saveLocation"
+                    },
                 )
             }
 

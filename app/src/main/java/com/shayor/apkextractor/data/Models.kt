@@ -48,8 +48,8 @@ enum class SortBy(val label: String) {
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class SplitMode(val label: String, val description: String) {
-    MERGE("Single APK", "Easiest to install"),
-    BUNDLE(".apks bundle", "Keeps the original signature. Install it from the Install tab"),
+    BUNDLE("APKS Bundle", "Keeps the original signature, so it can update the store version. Install it from the Install tab"),
+    MERGE("Single APK", "One file that installs anywhere, re-signed"),
     BASE_ONLY("Base APK only", "For inspection. May not install"),
 }
 
@@ -66,7 +66,7 @@ data class Settings(
     val pureBlack: Boolean = false,
     val outputTreeUri: String? = null,
     val outputFolderName: String? = null,
-    val splitMode: SplitMode = SplitMode.MERGE,
+    val splitMode: SplitMode = SplitMode.BUNDLE,
     val nameFormat: NameFormat = NameFormat.LABEL_VERSION,
     val filter: AppFilter = AppFilter.USER,
     val packageType: PackageType = PackageType.ALL,

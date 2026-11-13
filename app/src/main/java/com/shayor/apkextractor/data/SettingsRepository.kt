@@ -29,7 +29,7 @@ class SettingsRepository private constructor(context: Context) {
         pureBlack = prefs.getBoolean(K_BLACK, false),
         outputTreeUri = prefs.getString(K_TREE, null),
         outputFolderName = prefs.getString(K_TREE_NAME, null),
-        splitMode = enumOr(prefs.getString(K_SPLIT, null), SplitMode.MERGE),
+        splitMode = enumOr(prefs.getString(K_SPLIT, null), SplitMode.BUNDLE),
         nameFormat = enumOr(prefs.getString(K_NAME, null), NameFormat.LABEL_VERSION),
         filter = enumOr(prefs.getString(K_FILTER, null), AppFilter.USER),
         packageType = enumOr(prefs.getString(K_TYPE, null), PackageType.ALL),
@@ -62,8 +62,10 @@ class SettingsRepository private constructor(context: Context) {
         private const val K_BLACK = "pure_black"
         private const val K_TREE = "output_tree"
         private const val K_TREE_NAME = "output_tree_name"
-        // v2: the default changed to MERGE, which is what people expect ("one APK that installs").
-        private const val K_SPLIT = "split_mode_v2"
+        // v3: the default is BUNDLE again. It keeps the original signature, so a saved copy (and every
+        // auto-backup) can later be installed as an update over the store version; a merged APK is
+        // re-signed and can't. A new key moves everyone to it once, as each save writes all settings.
+        private const val K_SPLIT = "split_mode_v3"
         private const val K_NAME = "name_format"
         private const val K_FILTER = "filter"
         private const val K_TYPE = "package_type"

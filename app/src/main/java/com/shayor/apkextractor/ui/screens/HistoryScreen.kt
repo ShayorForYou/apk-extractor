@@ -165,17 +165,7 @@ fun HistoryScreen(
                     modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 7.dp),
                 )
             }
-            if (entries.isEmpty()) {
-                item(key = "empty") {
-                    EmptyState(
-                        icon = Icons.Rounded.History,
-                        title = "No Saved Apps",
-                        message = "Apps you extract will show up here.",
-                    ) {
-                        PrimaryButton("Browse Apps", onClick = onBrowseApps, height = 44.dp)
-                    }
-                }
-            } else {
+            if (entries.isNotEmpty()) {
                 itemsIndexed(items, key = { _, it -> it.key }) { i, item ->
                     val shape = groupItemShape(item.first, item.last)
                     when (item) {
@@ -224,6 +214,24 @@ fun HistoryScreen(
                             .padding(top = 12.dp),
                         textAlign = TextAlign.Center,
                     )
+                }
+            }
+        }
+
+        if (entries.isEmpty()) {
+            // Centred in the space between the top bar and the tab bar.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(top = topBarHeight(), bottom = contentPadding.calculateBottomPadding()),
+                contentAlignment = Alignment.Center,
+            ) {
+                EmptyState(
+                    icon = Icons.Rounded.History,
+                    title = "No Saved Apps",
+                    message = "Apps you extract will show up here.",
+                ) {
+                    PrimaryButton("Browse Apps", onClick = onBrowseApps, height = 44.dp)
                 }
             }
         }

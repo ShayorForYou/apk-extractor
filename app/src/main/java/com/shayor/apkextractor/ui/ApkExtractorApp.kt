@@ -92,6 +92,7 @@ import com.shayor.apkextractor.ui.components.LocalGlassKey
 import com.shayor.apkextractor.ui.components.LocalGlassState
 import com.shayor.apkextractor.ui.components.PrimaryButton
 import com.shayor.apkextractor.ui.components.ShareButton
+import com.shayor.apkextractor.ui.components.SplitFormatMenu
 import com.shayor.apkextractor.ui.components.TonalIconButton
 import com.shayor.apkextractor.ui.components.UndoVisuals
 import com.shayor.apkextractor.ui.components.glass
@@ -141,6 +142,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     val selection by vm.selection.collectAsStateWithLifecycle()
     val appsByPackage by vm.appsByPackage.collectAsStateWithLifecycle()
     val autoBackupApps by vm.autoBackupApps.collectAsStateWithLifecycle()
+    val autoBackupFormats by vm.autoBackupFormats.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.APPS) }
     var detailsPkg by rememberSaveable { mutableStateOf<String?>(null) }
@@ -304,7 +306,13 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                         onBrowseApps = { goTo(Tab.APPS) },
                         onInstall = installVm::open,
                     )
-                    Tab.SETTINGS -> SettingsScreen(vm, snackbar, pagePadding)
+                    Tab.SETTINGS -> SettingsScreen(
+                        vm,
+                        snackbar,
+                        pagePadding,
+                        onOpenApp = { detailsPkg = it },
+                        onBrowseApps = { goTo(Tab.APPS) },
+                    )
                 }
                 }
                 }
@@ -339,7 +347,8 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                         onClear = vm::clearSelection,
                         onSelectAll = vm::selectAllVisible,
                         onShare = { mode -> vm.share(selection, mode) },
-                        onExtract = { requestExtract(selection) },
+                        defaultSplitMode = settings.splitMode,
+                        onExtract = { mode -> extractWith(selection, mode) },
                     )
                 } else {
                     GlassTabBar(tab, onSelect = goTo)
@@ -355,6 +364,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                 app = app,
                 splitMode = settings.splitMode,
                 autoBackup = pkg in autoBackupApps,
+                backupFormat = autoBackupFormats[pkg],
                 saveLocation = settings.outputFolderName ?: ApkExporter.DEFAULT_LOCATION,
                 onDismiss = { detailsPkg = null },
                 onExtract = { mode -> extractWith(listOf(pkg), mode) },
@@ -362,7 +372,8 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                     detailsPkg = null
                     vm.share(listOf(pkg), mode)
                 },
-                onAutoBackupChange = { on -> vm.setAutoBackup(pkg, on) },
+                onAutoBackupChange = { on, format -> vm.setAutoBackup(pkg, on, format) },
+                onBackupFormatChange = { format -> vm.setAutoBackupFormat(pkg, format) },
             )
         } else if (appsByPackage.isNotEmpty()) {
             LaunchedEffect(pkg) { detailsPkg = null } // uninstalled while open
@@ -503,8 +514,12 @@ private fun SelectionBar(
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
     onShare: (SplitMode?) -> Unit,
-    onExtract: () -> Unit,
+    defaultSplitMode: SplitMode,
+    onExtract: (SplitMode?) -> Unit,
 ) {
+    // Like Share: with split apps in the selection, ask how to save them instead of silently
+    // using the Settings default. Without any, extract straight away.
+    var askFormat by remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -532,6 +547,23 @@ private fun SelectionBar(
         Spacer(Modifier.width(8.dp))
         ShareButton(hasSplit, onShare = onShare, size = 40.dp)
         Spacer(Modifier.width(8.dp))
-        PrimaryButton("Extract", onClick = onExtract, icon = Icons.Rounded.Download, height = 48.dp)
+        Box {
+            PrimaryButton(
+                "Extract",
+                onClick = { if (hasSplit) askFormat = true else onExtract(null) },
+                icon = Icons.Rounded.Download,
+                height = 48.dp,
+            )
+            SplitFormatMenu(
+                askFormat,
+                onDismiss = { askFormat = false },
+                title = "Extract Split Apps As",
+                default = defaultSplitMode.takeIf { it != SplitMode.BASE_ONLY },
+                onPick = { mode ->
+                    askFormat = false
+                    onExtract(mode)
+                },
+            )
+        }
     }
 }

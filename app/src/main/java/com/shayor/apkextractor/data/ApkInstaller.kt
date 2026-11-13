@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
@@ -48,6 +49,12 @@ data class PackageToInstall(
     val installedVersionCode: Long?,
     /** False when the installed app was signed with a different key (install will fail). */
     val signatureMatches: Boolean,
+    /**
+     * True when the app isn't installed for this user but Android still keeps it: installed in
+     * another profile or user (Secure Folder, Dual Messenger, a work profile), or uninstalled with
+     * its data kept. That copy still decides which signature and version Android accepts.
+     */
+    val installedElsewhere: Boolean = false,
     internal val certs: Set<String>,
     internal val baseFile: File,
 ) {
@@ -63,7 +70,13 @@ sealed interface InstallResult {
 
     data class NeedsConfirmation(override val sessionId: Int, val intent: Intent) : InstallResult
     data class Success(override val sessionId: Int) : InstallResult
-    data class Failure(override val sessionId: Int, val message: String, val cancelled: Boolean = false) : InstallResult
+    data class Failure(
+        override val sessionId: Int,
+        val message: String,
+        val cancelled: Boolean = false,
+        /** Android refused because of another copy of the app (signature or version). */
+        val conflict: Boolean = false,
+    ) : InstallResult
 }
 
 /**
@@ -169,6 +182,7 @@ class ApkInstaller(private val context: Context) {
                 installedVersionName = null,
                 installedVersionCode = null,
                 signatureMatches = true,
+                installedElsewhere = false,
                 certs = emptySet(),
                 baseFile = baseFile,
             ),
@@ -178,13 +192,18 @@ class ApkInstaller(private val context: Context) {
     /** Re-checks whether (and which version of) the app is on the phone, e.g. after an uninstall. */
     fun withInstalledState(pkg: PackageToInstall): PackageToInstall {
         val installed = runCatching { installedInfo(pkg.packageName) }.getOrNull()
-            ?: return pkg.copy(installedVersionName = null, installedVersionCode = null, signatureMatches = true)
+            ?: return pkg.copy(
+                installedVersionName = null, installedVersionCode = null,
+                signatureMatches = true, installedElsewhere = false,
+            )
+        val here = installed.applicationInfo?.let { it.flags and ApplicationInfo.FLAG_INSTALLED != 0 } ?: true
         // Only now is the (expensive) archive signature needed.
         val certs = pkg.certs.ifEmpty { archiveInfo(pkg.baseFile, certFlags)?.let(::certificates).orEmpty() }
         val installedCerts = certificates(installed)
         return pkg.copy(
             installedVersionName = installed.versionName,
             installedVersionCode = installed.versionCodeCompat,
+            installedElsewhere = !here,
             certs = certs,
             // Unknown certificates (rare) are treated as a match and left to the installer to judge.
             signatureMatches = certs.isEmpty() || installedCerts.isEmpty() || certs.any { it in installedCerts },
@@ -371,13 +390,21 @@ class ApkInstaller(private val context: Context) {
         }
     }.getOrNull()
 
-    private fun installedInfo(packageName: String): PackageInfo =
-        if (Build.VERSION.SDK_INT >= 33) {
-            pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(certFlags.toLong()))
+    /**
+     * The copy of [packageName] Android knows about, including one that isn't installed for this
+     * user (see [PackageToInstall.installedElsewhere]). This finds an app uninstalled with its data
+     * kept; one installed only for another user or profile stays invisible to us, and shows up as a
+     * conflict when installing ([InstallResult.Failure.conflict]).
+     */
+    private fun installedInfo(packageName: String): PackageInfo {
+        val flags = certFlags or PackageManager.MATCH_UNINSTALLED_PACKAGES
+        return if (Build.VERSION.SDK_INT >= 33) {
+            pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
         } else {
             @Suppress("DEPRECATION")
-            pm.getPackageInfo(packageName, certFlags)
+            pm.getPackageInfo(packageName, flags)
         }
+    }
 
     @Suppress("DEPRECATION")
     private fun certificates(info: PackageInfo): Set<String> {
@@ -451,18 +478,23 @@ class InstallResultReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_SUCCESS -> InstallResult.Success(sessionId)
             else -> InstallResult.Failure(
                 sessionId,
-                friendlyMessage(status),
+                friendlyMessage(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()),
                 cancelled = status == PackageInstaller.STATUS_FAILURE_ABORTED,
+                conflict = status == PackageInstaller.STATUS_FAILURE_CONFLICT,
             )
         }
         ApkInstaller.emit(result)
     }
 
-    private fun friendlyMessage(status: Int) = when (status) {
+    private fun friendlyMessage(status: Int, detail: String) = when (status) {
         PackageInstaller.STATUS_FAILURE_ABORTED -> "Installation was cancelled"
         PackageInstaller.STATUS_FAILURE_BLOCKED -> "Installation was blocked on this phone"
-        PackageInstaller.STATUS_FAILURE_CONFLICT ->
-            "It conflicts with the version already installed. Uninstall that one first."
+        PackageInstaller.STATUS_FAILURE_CONFLICT -> when {
+            "UPDATE_INCOMPATIBLE" in detail || "SIGNATURE" in detail ->
+                "Signed differently from another copy"
+            "VERSION_DOWNGRADE" in detail -> "A newer copy is already on this phone"
+            else -> "Conflicts with another copy of the app"
+        }
         PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "This app isn't compatible with this phone"
         PackageInstaller.STATUS_FAILURE_INVALID -> "The file is damaged or incomplete"
         PackageInstaller.STATUS_FAILURE_STORAGE -> "Not enough storage space"

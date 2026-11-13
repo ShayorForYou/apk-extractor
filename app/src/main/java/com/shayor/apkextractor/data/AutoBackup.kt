@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -35,15 +36,43 @@ class AutoBackup private constructor(private val context: Context) {
     private val _watched = MutableStateFlow(prefs.getStringSet(K_WATCHED, null).orEmpty().toSet())
     val watched: StateFlow<Set<String>> = _watched.asStateFlow()
 
-    fun set(packageName: String, enabled: Boolean) {
+    /**
+     * How each split app is backed up (APK or APKS), as chosen in its details when auto-backup was
+     * turned on or since. Apps without an entry (not split, or watched before this existed) follow
+     * the Split Apps default in Settings.
+     */
+    private val _formats = MutableStateFlow(readFormats())
+    val formats: StateFlow<Map<String, SplitMode>> = _formats.asStateFlow()
+
+    /** [format]: for a split app, how to save it; null keeps the Settings default. */
+    fun set(packageName: String, enabled: Boolean, format: SplitMode? = null) {
         val now = _watched.updateAndGet { if (enabled) it + packageName else it - packageName }
+        val keep = format.takeIf { enabled }
         prefs.edit {
             putStringSet(K_WATCHED, now)
             if (!enabled) remove(doneKey(packageName))
+            if (keep != null) putString(formatKey(packageName), keep.name) else remove(formatKey(packageName))
         }
+        _formats.update { if (keep != null) it + (packageName to keep) else it - packageName }
         schedule()
         if (enabled) runNow()
     }
+
+    /** Changes how a watched split app is saved, from its next new version on. */
+    fun setFormat(packageName: String, format: SplitMode) {
+        if (packageName !in _watched.value || _formats.value[packageName] == format) return
+        prefs.edit { putString(formatKey(packageName), format.name) }
+        _formats.update { it + (packageName to format) }
+    }
+
+    internal fun formatFor(packageName: String): SplitMode? = _formats.value[packageName]
+
+    private fun readFormats(): Map<String, SplitMode> =
+        prefs.all.mapNotNull { (key, value) ->
+            if (!key.startsWith(FORMAT_PREFIX)) return@mapNotNull null
+            val mode = SplitMode.entries.firstOrNull { it.name == value } ?: return@mapNotNull null
+            key.removePrefix(FORMAT_PREFIX) to mode
+        }.toMap()
 
     /** Called when an app was installed or updated while APK Extractor is running. */
     fun onPackageChanged(packageName: String) {
@@ -84,11 +113,13 @@ class AutoBackup private constructor(private val context: Context) {
     internal fun markDone(app: AppInfo) = prefs.edit { putString(doneKey(app.packageName), versionKey(app)) }
 
     private fun doneKey(pkg: String) = "done_$pkg"
+    private fun formatKey(pkg: String) = "$FORMAT_PREFIX$pkg"
     private fun versionKey(app: AppInfo) = "${app.versionCode}@${app.lastUpdateTime}"
 
     companion object {
         private const val TAG = "AutoBackup"
         private const val K_WATCHED = "watched"
+        private const val FORMAT_PREFIX = "format_"
         private const val PERIODIC_ID = 4101
         private const val NOW_ID = 4102
         private const val PERIOD_MS = 6 * 60 * 60 * 1000L
@@ -110,10 +141,12 @@ class AutoBackup private constructor(private val context: Context) {
             val repo = AppRepository(context)
             val exporter = ApkExporter(context)
             val history = HistoryRepository.get(context)
-            val settings = SettingsRepository.get(context).settings.value
+            val defaults = SettingsRepository.get(context).settings.value
             for (pkg in store.watched.value) {
                 val app = repo.load(pkg) ?: continue // uninstalled for now; keep watching
                 if (!store.isDue(app)) continue
+                // This app's own format, if it has one; otherwise the Settings default.
+                val settings = store.formatFor(pkg)?.let { defaults.copy(splitMode = it) } ?: defaults
                 // Already saved this exact version (e.g. extracted by hand)? Nothing to do.
                 val extension = if (app.isSplit && settings.splitMode == SplitMode.BUNDLE) "apks" else "apk"
                 val saved = history.findSaved(app, extension)

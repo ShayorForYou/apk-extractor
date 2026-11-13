@@ -38,7 +38,12 @@ sealed interface InstallState {
         InstallState
 
     data class Done(val pkg: PackageToInstall, val canOpen: Boolean) : InstallState
-    data class Failed(val message: String, val pkg: PackageToInstall? = null) : InstallState
+    data class Failed(
+        val message: String,
+        val pkg: PackageToInstall? = null,
+        /** Blocked by another copy of the app, which has to be removed first. */
+        val conflict: Boolean = false,
+    ) : InstallState
 }
 
 class InstallViewModel(app: Application) : AndroidViewModel(app) {
@@ -83,7 +88,7 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
                         _state.value = if (result.cancelled) {
                             InstallState.Ready(current.pkg)
                         } else {
-                            InstallState.Failed(result.message, current.pkg)
+                            InstallState.Failed(result.message, current.pkg, result.conflict)
                         }
                     }
                 }
@@ -210,7 +215,12 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun uninstallInstalled() {
-        val pkg = (_state.value as? InstallState.Ready)?.pkg ?: return
+        val pkg = when (val s = _state.value) {
+            is InstallState.Ready -> s.pkg
+            // Back to Ready, so the check on return from the uninstall screen sees the change.
+            is InstallState.Failed -> s.pkg?.also { _state.value = InstallState.Ready(it) }
+            else -> null
+        } ?: return
         @Suppress("DEPRECATION")
         _launch.trySend(Intent(Intent.ACTION_DELETE, Uri.fromParts("package", pkg.packageName, null)))
     }

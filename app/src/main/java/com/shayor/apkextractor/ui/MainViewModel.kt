@@ -150,6 +150,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Apps that are saved automatically whenever they update. */
     val autoBackupApps: StateFlow<Set<String>> = autoBackup.watched
+    /** Each watched split app's own format (APK or APKS); missing ones follow Settings. */
+    val autoBackupFormats: StateFlow<Map<String, SplitMode>> = autoBackup.formats
 
     val history: StateFlow<List<HistoryEntry>> = historyRepo.entries
 
@@ -400,14 +402,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Auto-backup
     // ---------------------------------------------------------------------------------------------
 
-    fun setAutoBackup(pkg: String, enabled: Boolean) {
-        autoBackup.set(pkg, enabled)
+    /** [format]: for a split app, how its backups are saved (its Save As choice); null = Settings default. */
+    fun setAutoBackup(pkg: String, enabled: Boolean, format: SplitMode? = null) {
+        autoBackup.set(pkg, enabled, format)
         _events.trySend(
             UiEvent.Message(
-                if (enabled) "Saving this version now, and every update from here on" else "Auto-backup turned off",
+                when {
+                    !enabled -> "Auto-backup turned off"
+                    // Watched but not installed (e.g. from the Auto-Backup list): nothing to save yet.
+                    allApps.value?.none { it.packageName == pkg } == true -> "It's saved again once the app is reinstalled"
+                    else -> "Saving this version now, and every update from here on"
+                },
             ),
         )
     }
+
+    /** A watched split app's Save As choice changed: its next backups use it. */
+    fun setAutoBackupFormat(pkg: String, format: SplitMode) = autoBackup.setFormat(pkg, format)
 
     // ---------------------------------------------------------------------------------------------
     // Export / share
