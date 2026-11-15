@@ -1,5 +1,6 @@
 package com.shayor.apkextractor.data
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -11,11 +12,14 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.os.StatFs
 import android.provider.OpenableColumns
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -24,13 +28,26 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.IOException
-import java.security.MessageDigest
 import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.InputStream
+import java.security.MessageDigest
+import java.util.zip.ZipEntry
 import java.util.zip.ZipException
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
+
+/** Game data (an OBB file) inside an .xapk; copied to Android/obb/<package>/ when installing. */
+@Immutable
+data class ObbFile(
+    /** Path of the entry inside the bundle. */
+    val entry: String,
+    /** File name in the OBB folder, e.g. main.120.com.example.game.obb. */
+    val name: String,
+    val size: Long,
+)
 
 /** An APK or split-APK bundle that has been read and is ready to install. */
 @Immutable
@@ -43,7 +60,10 @@ data class PackageToInstall(
     val icon: ImageBitmap?,
     /** base.apk first, then its splits (already filtered for this device's CPU). */
     val files: List<File>,
+    /** APKs plus game data. */
     val totalBytes: Long,
+    /** Game data to copy next to the app (XAPK only); read from [source] only when installing. */
+    val obbs: List<ObbFile> = emptyList(),
     /** Version of the same app already on the phone, or null if it isn't installed. */
     val installedVersionName: String?,
     val installedVersionCode: Long?,
@@ -57,8 +77,11 @@ data class PackageToInstall(
     val installedElsewhere: Boolean = false,
     internal val certs: Set<String>,
     internal val baseFile: File,
+    internal val source: Uri? = null,
 ) {
     val isBundle get() = files.size > 1
+    val hasObb get() = obbs.isNotEmpty()
+    val obbBytes get() = obbs.sumOf { it.size.coerceAtLeast(0) }
     val isInstalled get() = installedVersionCode != null
     val isDowngrade get() = installedVersionCode != null && versionCode < installedVersionCode
     val needsNewerAndroid get() = minSdk > Build.VERSION.SDK_INT
@@ -93,32 +116,34 @@ class ApkInstaller(private val context: Context) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls()
 
     /**
-     * Reads the app inside [uri]. Bundles are streamed straight from the source in one pass, skipping
-     * splits for other CPUs; only the base APK is parsed, and signatures are only checked when the
-     * app is already installed (that check hashes the whole APK, so it is skipped when not needed).
+     * Reads the app inside [uri]. Bundles are read with random access when the source allows it (or
+     * streamed in one pass otherwise): only the APKs for this device's CPU are extracted, and game
+     * data (OBB) is just listed, then copied straight from the source when installing. Only the
+     * base APK is parsed, and signatures are only checked when the app is already installed (that
+     * check hashes the whole APK, so it is skipped when not needed).
      */
     suspend fun read(uri: Uri, iconPx: Int): PackageToInstall = withContext(Dispatchers.IO) {
         clear()
         val dir = File(workRoot, System.nanoTime().toString()).apply { mkdirs() }
-        val size = querySize(uri)
-        if (size > 0) ensureSpace(size)
-        val apks = try {
+        val bundle = try {
             val name = displayName(uri).orEmpty().lowercase()
             if (name.endsWith(".apk")) {
-                listOf(copy(uri, File(dir, "base.apk")))
+                querySize(uri).let { if (it > 0) ensureSpace(it) }
+                Unpacked(listOf(copy(uri, File(dir, "base.apk"))))
             } else {
                 // null = the zip is itself an APK (no recognisable extension).
-                streamBundle(uri, dir) ?: listOf(copy(uri, File(dir, "base.apk")))
+                unpackBundle(uri, dir) ?: Unpacked(listOf(copy(uri, File(dir, "base.apk"))))
             }
         } catch (e: ExportException) {
             throw e
         } catch (e: SecurityException) {
             throw ExportException(CANT_OPEN, e)
         } catch (e: IOException) {
-            throw ExportException(NOT_AN_APK, e)
+            throw ExportException(if (isNoSpace(e)) NO_SPACE else NOT_AN_APK, e)
         }
-        if (apks.isEmpty()) throw ExportException(NOT_AN_APK)
-        parse(apks, iconPx)
+        if (bundle.apks.isEmpty()) throw ExportException(NOT_AN_APK)
+        val pkg = parse(bundle.apks, iconPx)
+        if (bundle.obbs.isEmpty()) pkg else pkg.copy(obbs = bundle.obbs, source = bundle.source).let { it.copy(totalBytes = it.totalBytes + it.obbBytes) }
     }
 
     /** Reads several APKs shared together (a base APK and its splits) as one app. */
@@ -219,10 +244,28 @@ class ApkInstaller(private val context: Context) {
      * the bytes written; the outcome arrives later through [results].
      */
     suspend fun install(pkg: PackageToInstall, onProgress: (Float) -> Unit): Int = withContext(Dispatchers.IO) {
+        var written = 0L
+        val report: (Long) -> Unit = { n ->
+            written += n
+            onProgress(if (pkg.totalBytes > 0) written.toFloat() / pkg.totalBytes else 0f)
+        }
+        // Game data first: it's the bulk of an XAPK, and a missing permission or space shows up
+        // before anything is written to the session.
+        if (pkg.hasObb) {
+            try {
+                copyObbs(pkg, report)
+            } catch (e: ExportException) {
+                throw e
+            } catch (e: SecurityException) {
+                throw ExportException(OBB_DENIED, e)
+            } catch (e: IOException) {
+                throw ExportException(if (isNoSpace(e)) NO_SPACE else OBB_FAILED, e)
+            }
+        }
         val installer = pm.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(pkg.packageName)
-            setSize(pkg.totalBytes)
+            setSize(pkg.files.sumOf { it.length() })
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) setInstallReason(PackageManager.INSTALL_REASON_USER)
         }
         val sessionId = try {
@@ -233,7 +276,6 @@ class ApkInstaller(private val context: Context) {
         var committed = false
         try {
             installer.openSession(sessionId).use { session ->
-                var written = 0L
                 val buffer = ByteArray(BUFFER)
                 pkg.files.forEachIndexed { i, file ->
                     session.openWrite("${i}_${file.name}", 0, file.length()).use { out ->
@@ -243,8 +285,7 @@ class ApkInstaller(private val context: Context) {
                                 val n = input.read(buffer)
                                 if (n < 0) break
                                 out.write(buffer, 0, n)
-                                written += n
-                                onProgress(if (pkg.totalBytes > 0) written.toFloat() / pkg.totalBytes else 0f)
+                                report(n.toLong())
                             }
                         }
                         session.fsync(out)
@@ -280,14 +321,79 @@ class ApkInstaller(private val context: Context) {
     // Bundles
     // ---------------------------------------------------------------------------------------------
 
+    private class Unpacked(val apks: List<File>, val obbs: List<ObbFile> = emptyList(), val source: Uri? = null)
+
+    private val deviceAbis by lazy { Build.SUPPORTED_ABIS.map { it.replace('-', '_') }.toSet() }
+
     /**
-     * Extracts the APKs from an .apks / .xapk / .apkm zip in a single streaming pass. Returns null if
-     * the zip turns out to be a plain APK. Paths are flattened (no zip-slip).
+     * Extracts the APKs from an .apks / .xapk / .apkm zip. Returns null if the zip turns out to be a
+     * plain APK. Random access when the source is a real file (only the needed entries are read at
+     * all); a single streaming pass otherwise.
      */
-    private fun streamBundle(uri: Uri, dir: File): List<File>? {
-        val deviceAbis = Build.SUPPORTED_ABIS.map { it.replace('-', '_') }.toSet()
+    private fun unpackBundle(uri: Uri, dir: File): Unpacked? {
+        openZip(uri)?.use { zip ->
+            try {
+                return unpackZip(zip, dir, uri) ?: return null
+            } catch (_: ZipException) {
+                dir.listFiles()?.forEach { it.delete() }
+            }
+        }
+        return streamBundle(uri, dir)
+    }
+
+    /**
+     * Opens [uri] as a random-access zip on its file descriptor, or null when the source can't seek
+     * (a pipe or a network stream) or isn't a zip.
+     */
+    private fun openZip(uri: Uri): ChannelZip? = runCatching {
+        val pfd = resolver.openFileDescriptor(uri, "r") ?: return@runCatching null
+        // Pipes report no size and can't seek.
+        if (pfd.statSize <= 0) {
+            pfd.close()
+            return@runCatching null
+        }
+        val stream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
+        ChannelZip(stream.channel, stream)
+    }.getOrNull()
+
+    /** Picks the APKs this device needs from [zip] and extracts them; lists game data without reading it. */
+    private fun unpackZip(zip: ChannelZip, dir: File, source: Uri): Unpacked? {
+        if (zip.getEntry("AndroidManifest.xml") != null) return null
+        val splits = ArrayList<ChannelZip.Entry>()
+        val standalones = ArrayList<ChannelZip.Entry>()
+        val obbs = LinkedHashMap<String, ObbFile>()
+        for (entry in zip.entries) {
+            if (entry.isDirectory) continue
+            val name = entry.name
+            when {
+                name.endsWith(".obb", ignoreCase = true) ->
+                    obbName(name)?.let { obbs.putIfAbsent(it, ObbFile(name, it, entry.size)) }
+                name.endsWith(".apk", ignoreCase = true) -> {
+                    // Splits for CPUs this phone doesn't have are never needed: don't even read them.
+                    val abi = abiOf(name.substringAfterLast('/'))
+                    if (abi != null && abi !in deviceAbis) continue
+                    // bundletool archives also carry fallback "standalones"; prefer the splits.
+                    if (name.startsWith("standalones/")) standalones += entry else splits += entry
+                }
+            }
+        }
+        val used = HashSet<String>()
+        val apks = splits.ifEmpty { standalones }.map { entry ->
+            var name = entry.name.substringAfterLast('/').ifBlank { "split.apk" }
+            while (!used.add(name)) name = "x_$name"
+            File(dir, name).also { out -> zip.getInputStream(entry).use { input -> out.outputStream().use { input.copyTo(it, BUFFER) } } }
+        }
+        return Unpacked(apks, obbs.values.toList(), source)
+    }
+
+    /**
+     * The streaming fallback: one pass over the zip. Paths are flattened (no zip-slip). Game data
+     * is only listed; its bytes are skipped, not written.
+     */
+    private fun streamBundle(uri: Uri, dir: File): Unpacked? {
         val splits = ArrayList<File>()
         val standalones = ArrayList<File>()
+        val obbEntries = ArrayList<ZipEntry>()
         val used = HashSet<String>()
         try {
             val stream = resolver.openInputStream(uri) ?: throw ExportException(CANT_OPEN)
@@ -295,15 +401,18 @@ class ApkInstaller(private val context: Context) {
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (entry.name == "AndroidManifest.xml") return null
-                    if (entry.isDirectory || !entry.name.endsWith(".apk", ignoreCase = true)) continue
+                    if (entry.isDirectory) continue
+                    if (entry.name.endsWith(".obb", ignoreCase = true)) {
+                        obbEntries += entry // its size is known once the stream has moved past it
+                        continue
+                    }
+                    if (!entry.name.endsWith(".apk", ignoreCase = true)) continue
                     var name = entry.name.substringAfterLast('/').ifBlank { "split.apk" }
-                    // Splits for CPUs this phone doesn't have are never needed — don't even write them.
                     val abi = abiOf(name)
                     if (abi != null && abi !in deviceAbis) continue
                     while (!used.add(name)) name = "x_$name"
                     val out = File(dir, name)
                     out.outputStream().use { zip.copyTo(it, BUFFER) }
-                    // bundletool archives also carry fallback "standalones"; prefer the splits.
                     if (entry.name.startsWith("standalones/")) standalones += out else splits += out
                 }
             }
@@ -312,27 +421,127 @@ class ApkInstaller(private val context: Context) {
             dir.listFiles()?.forEach { it.delete() }
             return unpackFromCopy(uri, dir)
         }
-        return if (splits.isNotEmpty()) {
+        val apks = if (splits.isNotEmpty()) {
             standalones.forEach { it.delete() }
             splits
         } else {
             standalones
         }
+        val obbs = LinkedHashMap<String, ObbFile>()
+        obbEntries.forEach { e -> obbName(e.name)?.let { obbs.putIfAbsent(it, ObbFile(e.name, it, e.size)) } }
+        return Unpacked(apks, obbs.values.toList(), uri)
     }
 
-    private fun unpackFromCopy(uri: Uri, dir: File): List<File>? {
+    private fun unpackFromCopy(uri: Uri, dir: File): Unpacked? {
         val source = copy(uri, File(dir, "source.zip"))
-        ZipFile(source).use { zip ->
-            if (zip.getEntry("AndroidManifest.xml") != null) return listOf(source.renameToApk("base.apk"))
-            val entries = zip.entries().toList().filter { !it.isDirectory && it.name.endsWith(".apk", ignoreCase = true) }
-            val chosen = entries.filterNot { it.name.startsWith("standalones/") }.ifEmpty { entries }
-            val used = HashSet<String>()
-            return chosen.map { entry ->
-                var name = entry.name.substringAfterLast('/').ifBlank { "split.apk" }
-                while (!used.add(name)) name = "x_$name"
-                File(dir, name).also { out -> zip.getInputStream(entry).use { input -> out.outputStream().use { input.copyTo(it, BUFFER) } } }
-            }.also { source.delete() }
+        val unpacked = source.inputStream().let { ChannelZip(it.channel, it) }.use { unpackZip(it, dir, Uri.fromFile(source)) }
+            ?: return Unpacked(listOf(source.renameToApk("base.apk")))
+        // The copy is kept only while its game data still has to be installed.
+        if (unpacked.obbs.isEmpty()) source.delete()
+        return unpacked
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Game data (OBB)
+    // ---------------------------------------------------------------------------------------------
+
+    /** The file name only, so an entry can never be written outside the app's OBB folder. */
+    private fun obbName(entry: String): String? =
+        entry.substringAfterLast('/').substringAfterLast('\\').takeIf { it.length > 4 && !it.startsWith(".") }
+
+    @Suppress("DEPRECATION")
+    private fun obbDir(packageName: String) =
+        File(Environment.getExternalStorageDirectory(), "Android/obb/$packageName")
+
+    private fun partFile(dir: File, obb: ObbFile) = File(dir, "${obb.name}$PART")
+
+    /**
+     * Android 11+ lets apps allowed to install apps write to Android/obb; older versions need the
+     * storage permission.
+     */
+    fun needsStoragePermission(pkg: PackageToInstall): Boolean =
+        pkg.hasObb && Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Copies the game data straight from the bundle into the app's OBB folder, as .part files that
+     * [commitObbs] puts in place once the install succeeds. Parts already complete from an earlier
+     * attempt (e.g. the install prompt was cancelled) aren't written again.
+     */
+    private suspend fun copyObbs(pkg: PackageToInstall, report: (Long) -> Unit) {
+        val dir = obbDir(pkg.packageName)
+        if (!dir.isDirectory && !dir.mkdirs()) throw ExportException(OBB_DENIED)
+        val pending = pkg.obbs.filter { obb ->
+            val done = obb.size >= 0 && partFile(dir, obb).length() == obb.size
+            if (done) report(obb.size)
+            !done
         }
+        if (pending.isEmpty()) return
+        val free = runCatching { StatFs(dir.path).availableBytes }.getOrNull()
+        if (free != null && free < pending.sumOf { it.size.coerceAtLeast(0) } + SPACE_MARGIN) throw ExportException(NO_SPACE)
+
+        val source = pkg.source ?: throw ExportException(OBB_FAILED)
+        val buffer = ByteArray(BUFFER)
+        val write: suspend (InputStream, ObbFile) -> Unit = { input, obb ->
+            val out = try {
+                partFile(dir, obb).outputStream()
+            } catch (e: FileNotFoundException) {
+                throw ExportException(OBB_DENIED, e)
+            }
+            out.use {
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    it.write(buffer, 0, n)
+                    report(n.toLong())
+                }
+            }
+        }
+        val zip = openZip(source)
+        if (zip != null) {
+            zip.use {
+                for (obb in pending) {
+                    val entry = it.getEntry(obb.entry) ?: throw ExportException(OBB_FAILED)
+                    it.getInputStream(entry).use { input -> write(input, obb) }
+                }
+            }
+        } else {
+            val byEntry = pending.associateBy { it.entry }
+            var left = byEntry.size
+            val stream = resolver.openInputStream(source) ?: throw ExportException(CANT_OPEN)
+            ZipInputStream(BufferedInputStream(stream, BUFFER)).use { input ->
+                while (left > 0) {
+                    val entry = input.nextEntry ?: break
+                    val obb = byEntry[entry.name] ?: continue
+                    write(input, obb)
+                    left--
+                }
+            }
+            if (left > 0) throw ExportException(OBB_FAILED)
+        }
+    }
+
+    /** The app is installed: puts its game data in place (a rename, so instant). */
+    fun commitObbs(pkg: PackageToInstall) {
+        if (!pkg.hasObb) return
+        val dir = obbDir(pkg.packageName)
+        pkg.obbs.forEach { obb ->
+            val part = partFile(dir, obb)
+            if (!part.exists()) return@forEach
+            val target = File(dir, obb.name)
+            target.delete()
+            part.renameTo(target)
+        }
+    }
+
+    /** Removes game data copied for an install that won't happen. */
+    fun discardObbs(pkg: PackageToInstall) {
+        if (!pkg.hasObb) return
+        val dir = obbDir(pkg.packageName)
+        pkg.obbs.forEach { partFile(dir, it).delete() }
+        dir.delete() // only if it is empty, i.e. it was created for this install
     }
 
     private fun copy(uri: Uri, target: File): File {
@@ -435,6 +644,7 @@ class ApkInstaller(private val context: Context) {
         const val ACTION_INSTALL_RESULT = "com.shayor.apkextractor.INSTALL_RESULT"
         private const val BUFFER = 256 * 1024
         private const val SPACE_MARGIN = 50L * 1024 * 1024
+        private const val PART = ".part"
         private val KNOWN_ABIS = listOf("arm64_v8a", "armeabi_v7a", "armeabi", "x86_64", "x86", "riscv64", "mips64", "mips")
 
         const val NOT_AN_APK = "That file isn't an APK or APK bundle"
@@ -442,6 +652,9 @@ class ApkInstaller(private val context: Context) {
         const val CANT_INSTALL = "Couldn't start the installation"
         const val NOT_ONE_APP = "Share one app file, or the APK parts of a single app"
         const val NO_SPACE = "Not enough storage space"
+        const val OBB_DENIED = "Couldn't save the game data"
+        const val OBB_FAILED = "Couldn't copy the game data"
+        const val OBB_PERMISSION = "Storage access is needed for the game data"
 
         private val _results = MutableSharedFlow<InstallResult>(extraBufferCapacity = 8)
         val results: SharedFlow<InstallResult> = _results.asSharedFlow()

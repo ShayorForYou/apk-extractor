@@ -179,6 +179,15 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
             }
         }
     }
+    // XAPK game data on Android 10 and older needs the storage permission.
+    val obbPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        installVm.onStoragePermission(granted)
+    }
+    LaunchedEffect(installVm, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            installVm.storageRequest.collect { obbPermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }
+        }
+    }
     // Launcher shortcuts: "Install APK" opens the file picker, "Back up all apps" shows the
     // selection of every installed app (the ViewModel selects them) so one tap extracts them.
     val shortcut by vm.shortcut.collectAsStateWithLifecycle()

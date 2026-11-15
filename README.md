@@ -34,6 +34,7 @@ Extract, back up, share and install Android apps. Save any installed app as an A
 
 **Install**
 - Install `.apk`, `.apks`, `.xapk` and `.apkm` files from the Install tab, or open or share them with the app from any file manager. Split bundles install in one go.
+- XAPK game data (OBB) is copied to `Android/obb` straight from the file, without a temporary copy, and only after you tap Install. Large bundles open fast: only the parts your phone needs are read.
 - When the app is already installed, shows the installed and new versions side by side, highlights what changed, and says whether it's a major, minor or patch update.
 - Warns before installing over an app signed with a different key or a newer version, and explains when a copy in Secure Folder, Dual Messenger or another user is in the way.
 

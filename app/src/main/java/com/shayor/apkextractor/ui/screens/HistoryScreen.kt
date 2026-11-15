@@ -50,6 +50,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -178,7 +180,7 @@ fun HistoryScreen(
                         ) {
                             HistoryRow(
                                 entry = item.entry,
-                                onOpen = { vm.openHistoryFolder(item.entry) },
+                                onInstall = { onInstall(item.entry) },
                                 onShare = { vm.shareHistory(item.entry) },
                             )
                         }
@@ -240,7 +242,17 @@ fun HistoryScreen(
             "History",
             collapsed = collapsed,
             actions = if (entries.isNotEmpty()) {
-                { BarTextButton("Clear All", onClick = vm::clearHistory) }
+                {
+                    // Every file is saved to one folder: the newest file's is where new ones go too.
+                    TonalIconButton(
+                        Icons.Rounded.FolderOpen,
+                        "Open folder",
+                        onClick = { vm.openFolder(entries.first().treeUri) },
+                        size = 32.dp,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    BarTextButton("Clear All", onClick = vm::clearHistory)
+                }
             } else {
                 null
             },
@@ -272,14 +284,14 @@ private fun Modifier.topDivider(color: Color, inset: Dp) = drawBehind {
     drawRect(color, topLeft = Offset(x, 0f), size = Size(size.width - x, 0.5.dp.toPx()))
 }
 
+/** An app's newest saved file, at the top of its card. Same actions as its older versions. */
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onShare: () -> Unit) {
+private fun HistoryRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -> Unit) {
     val p = iosColors
     Row(
         Modifier
             .fillMaxWidth()
             .background(cellColor())
-            .clickable(onClick = onOpen)
             .padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -292,20 +304,14 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onShare: () -> U
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                entry.fileName,
-                style = MaterialTheme.typography.bodySmall,
-                color = p.secondaryLabel,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            VersionLine(entry, MaterialTheme.typography.bodySmall, p.secondaryLabel)
             Spacer(Modifier.height(3.dp))
             MetaLine(entry)
         }
         Spacer(Modifier.width(8.dp))
-        TonalIconButton(Icons.Rounded.Share, "Share ${entry.fileName}", onClick = onShare, size = 32.dp)
+        TonalIconButton(Icons.Rounded.Share, "Share ${entry.fileName}", onClick = onShare, size = 30.dp)
         Spacer(Modifier.width(8.dp))
-        TonalIconButton(Icons.Rounded.FolderOpen, "Open folder", onClick = onOpen, size = 32.dp)
+        PillButton("Install", onClick = onInstall)
     }
 }
 
@@ -353,12 +359,7 @@ private fun VersionRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                versionLabel(entry.versionName).take(24),
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            VersionLine(entry, MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), p.label)
             MetaLine(entry)
         }
         Spacer(Modifier.width(8.dp))
@@ -368,16 +369,33 @@ private fun VersionRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -
     }
 }
 
+/** "v1.5.0 · 20 MB": the version in [style], the size always plain and grey. */
+@Composable
+private fun VersionLine(entry: HistoryEntry, style: TextStyle, color: Color) {
+    val size = rememberFileSize(entry.sizeBytes)
+    val muted = iosColors.secondaryLabel
+    Text(
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(versionLabel(entry.versionName))
+            if (entry.sizeBytes > 0) {
+                withStyle(androidx.compose.ui.text.SpanStyle(color = muted, fontWeight = FontWeight.Normal)) {
+                    append("  ·  $size")
+                }
+            }
+        },
+        style = style,
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** When it was saved, and what kind of file (APK / APKS, AUTO for auto-backups). */
 @Composable
 private fun MetaLine(entry: HistoryEntry) {
-    val size = rememberFileSize(entry.sizeBytes)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        val parts = buildList {
-            add(relativeTime(entry.time))
-            if (entry.sizeBytes > 0) add(size)
-        }
         Text(
-            parts.joinToString("  ·  "),
+            relativeTime(entry.time),
             style = MaterialTheme.typography.labelMedium,
             color = iosColors.secondaryLabel,
             maxLines = 1,

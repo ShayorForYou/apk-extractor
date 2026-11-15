@@ -7,10 +7,11 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- Only needed to write to Downloads on Android 9 and older (10+ uses MediaStore). -->
+    <!-- Writing to Downloads on Android 9 and older (10+ uses MediaStore), and copying XAPK game
+         data to Android/obb on Android 10 and older (11+ allows it to apps that install apps). -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28"
+        android:maxSdkVersion="29"
         tools:ignore="ScopedStorage" />
 
     <!-- Installing APKs / split bundles picked by the user, and uninstalling a conflicting version first. -->
@@ -28,6 +29,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
+        android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.ApkExtractor"

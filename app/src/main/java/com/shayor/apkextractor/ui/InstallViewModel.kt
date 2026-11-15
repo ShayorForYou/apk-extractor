@@ -60,6 +60,10 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
     private val _launch = Channel<Intent>(Channel.BUFFERED)
     val launch: Flow<Intent> = _launch.receiveAsFlow()
 
+    /** Asks the UI for the storage permission (game data on Android 10 and older). */
+    private val _storageRequest = Channel<Unit>(Channel.CONFLATED)
+    val storageRequest: Flow<Unit> = _storageRequest.receiveAsFlow()
+
     private var job: Job? = null
     private var sessionId = -1
     private var confirmIntent: Intent? = null
@@ -81,6 +85,7 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     is InstallResult.Success -> {
                         finishSession()
+                        withContext(Dispatchers.IO) { installer.commitObbs(current.pkg) }
                         _state.value = InstallState.Done(current.pkg, installer.launchIntent(current.pkg.packageName) != null)
                     }
                     is InstallResult.Failure -> {
@@ -102,6 +107,7 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
 
     fun open(uri: Uri) {
         if (_state.value is InstallState.Installing) return
+        discardObbs()
         job?.cancel()
         _state.value = InstallState.Reading
         job = viewModelScope.launch {
@@ -123,6 +129,7 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
     fun openShared(uris: List<Uri>) {
         if (uris.size == 1) return open(uris[0])
         if (uris.isEmpty() || _state.value is InstallState.Installing) return
+        discardObbs()
         job?.cancel()
         _state.value = InstallState.Reading
         job = viewModelScope.launch {
@@ -174,6 +181,10 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
             allowInstalls()
             return
         }
+        if (installer.needsStoragePermission(pkg)) {
+            _storageRequest.trySend(Unit)
+            return
+        }
         _state.value = InstallState.Installing(pkg, 0f)
         job = viewModelScope.launch {
             try {
@@ -192,6 +203,12 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = InstallState.Failed(e.message ?: ApkInstaller.CANT_INSTALL, pkg)
             }
         }
+    }
+
+    /** Answer to [storageRequest]. */
+    fun onStoragePermission(granted: Boolean) {
+        val pkg = (_state.value as? InstallState.Ready)?.pkg ?: return
+        if (granted) install() else _state.value = InstallState.Failed(ApkInstaller.OBB_PERMISSION, pkg)
     }
 
     fun retry() {
@@ -235,8 +252,24 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value is InstallState.Installing) return // finishes on its own; the sheet stays
         job?.cancel()
         installAfterPermission = false
+        val pkg = pkgOf(_state.value)
         _state.value = InstallState.Idle
-        viewModelScope.launch(Dispatchers.IO) { installer.clear() }
+        viewModelScope.launch(Dispatchers.IO) {
+            pkg?.let(installer::discardObbs)
+            installer.clear()
+        }
+    }
+
+    private fun pkgOf(state: InstallState): PackageToInstall? = when (state) {
+        is InstallState.Ready -> state.pkg
+        is InstallState.Failed -> state.pkg
+        else -> null // Done: the game data is in place; Installing: still in use
+    }
+
+    /** Game data left from an install attempt (cancelled or failed) of the file being replaced. */
+    private fun discardObbs() {
+        val pkg = pkgOf(_state.value)?.takeIf { it.hasObb } ?: return
+        viewModelScope.launch(Dispatchers.IO) { installer.discardObbs(pkg) }
     }
 
     private fun finishSession() {
@@ -245,6 +278,7 @@ class InstallViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        pkgOf(_state.value)?.let(installer::discardObbs)
         installer.clear()
     }
 }

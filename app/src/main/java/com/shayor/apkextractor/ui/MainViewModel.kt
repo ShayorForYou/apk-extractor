@@ -579,10 +579,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (files.isNotEmpty()) _events.trySend(UiEvent.Launch(exporter.shareIntent(files)))
     }
 
-    fun openHistoryFolder(entry: HistoryEntry) = viewModelScope.launch {
-        if (historyRepo.exists(entry)) openFolder(entry.treeUri) else fileGone(entry)
-    }
-
     fun shareHistory(entry: HistoryEntry) = viewModelScope.launch {
         if (historyRepo.exists(entry)) shareFiles(listOf(entry.file)) else fileGone(entry)
     }
