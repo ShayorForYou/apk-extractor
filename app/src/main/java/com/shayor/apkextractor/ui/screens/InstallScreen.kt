@@ -59,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.withStyle
@@ -103,6 +104,7 @@ import com.shayor.apkextractor.data.PackageToInstall
 import com.shayor.apkextractor.ui.InstallState
 import com.shayor.apkextractor.ui.InstallViewModel
 import com.shayor.apkextractor.ui.MainViewModel
+import kotlinx.coroutines.launch
 import com.shayor.apkextractor.ui.components.AppIcon
 import com.shayor.apkextractor.ui.components.GlassTopBar
 import com.shayor.apkextractor.ui.components.GroupShape
@@ -140,10 +142,13 @@ fun InstallScreen(
     onPickFile: () -> Unit,
 ) {
     val history by vm.history.collectAsStateWithLifecycle()
+    val missingIds by vm.missingIds.collectAsStateWithLifecycle()
     val canInstall by installVm.canInstall.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val collapsed by listState.scrolledUnderBar()
-    val backups = history.take(MAX_BACKUPS)
+    val scope = rememberCoroutineScope()
+    // Files that are gone aren't offered here; they're flagged in History.
+    val backups = history.filter { it.id !in missingIds }.take(MAX_BACKUPS)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -168,7 +173,8 @@ fun InstallScreen(
                         entry,
                         first = i == 0,
                         last = i == backups.lastIndex,
-                        onInstall = { installVm.open(entry) },
+                        // Re-checked on tap: the file may have gone since the list was last checked.
+                        onInstall = { scope.launch { if (vm.ensureReadable(entry)) installVm.open(entry) } },
                     )
                 }
                 item(key = "backupsFooter") {

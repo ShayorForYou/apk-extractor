@@ -220,6 +220,9 @@ fun SettingsScreen(
         GlassTopBar("Settings", collapsed = collapsed)
     }
 
+    // After the save folder changes: offers to move the saved files there.
+    MoveFilesHost(vm)
+
     when (picker) {
         "split" -> ChoiceSheet(
             title = "Split Apps",

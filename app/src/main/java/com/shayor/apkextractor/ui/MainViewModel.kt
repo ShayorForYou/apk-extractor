@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.shayor.apkextractor.data.ApkExporter
+import com.shayor.apkextractor.data.Availability
 import com.shayor.apkextractor.data.AppFilter
 import com.shayor.apkextractor.data.PackageType
 import com.shayor.apkextractor.data.AppIcons
@@ -27,6 +28,7 @@ import com.shayor.apkextractor.data.ExportStage
 import com.shayor.apkextractor.data.ExportedFile
 import com.shayor.apkextractor.data.HistoryEntry
 import com.shayor.apkextractor.data.HistoryRepository
+import com.shayor.apkextractor.data.SavedFiles
 import com.shayor.apkextractor.data.NameFormat
 import com.shayor.apkextractor.data.Settings
 import com.shayor.apkextractor.data.SettingsRepository
@@ -37,6 +39,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.async
@@ -116,6 +120,30 @@ sealed interface TaskState {
     }
 }
 
+/** Moving saved files into a newly chosen save folder. */
+@Immutable
+sealed interface MoveState {
+    data object Idle : MoveState
+
+    /** Saved files are elsewhere; the user is asked whether to move them to [to]. */
+    data class Offer(val entries: List<HistoryEntry>, val bytes: Long, val from: String, val to: String) : MoveState
+
+    data class Moving(
+        val index: Int,
+        val total: Int,
+        val currentFile: String,
+        val bytesDone: Long,
+        val bytesTotal: Long,
+        val from: String,
+        val to: String,
+    ) : MoveState {
+        val progress: Float get() = if (bytesTotal <= 0) index.toFloat() / total else (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f)
+    }
+
+    /** [failed]: file name to reason. */
+    data class Done(val moved: Int, val failed: List<Pair<String, String>>, val to: String, val cancelled: Boolean) : MoveState
+}
+
 /** An app that was extracted, with the file it produced. */
 @Immutable
 data class SavedApp(val label: String, val packageName: String, val iconKey: String, val file: ExportedFile)
@@ -123,8 +151,11 @@ data class SavedApp(val label: String, val packageName: String, val iconKey: Str
 sealed interface UiEvent {
     data class Message(val text: String) : UiEvent
 
-    /** A message with an "Undo" action that runs [undo] if tapped before the snackbar goes away. */
-    class Undoable(val text: String, val undo: () -> Unit) : UiEvent
+    /**
+     * A message with an "Undo" action that runs [undo] if tapped before the snackbar goes away.
+     * Otherwise [commit] runs once it has gone (timed out, replaced, or the app left).
+     */
+    class Undoable(val text: String, val undo: () -> Unit, val commit: () -> Unit = {}) : UiEvent
     data class Launch(val intent: Intent) : UiEvent
 
     /** Tries each intent in order until one starts; shows [failMessage] if none can. */
@@ -146,6 +177,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val cache = AppListCache(app)
     private val exporter = ApkExporter(app)
     private val historyRepo = HistoryRepository.get(app)
+    private val savedFiles = SavedFiles(app)
     private val autoBackup = AutoBackup.get(app)
 
     /** Apps that are saved automatically whenever they update. */
@@ -154,6 +186,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val autoBackupFormats: StateFlow<Map<String, SplitMode>> = autoBackup.formats
 
     val history: StateFlow<List<HistoryEntry>> = historyRepo.entries
+
+    /** Saved files that are gone from disk (see [refreshHistory]); the UI hides or flags them. */
+    val missingIds: StateFlow<Set<Long>> = historyRepo.missing
 
     val settings: StateFlow<Settings> = settingsRepo.settings
 
@@ -177,6 +212,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val events: Flow<UiEvent> = _events.receiveAsFlow()
 
     private var taskJob: Job? = null
+
+    private val _move = MutableStateFlow<MoveState>(MoveState.Idle)
+    val move: StateFlow<MoveState> = _move.asStateFlow()
+    private var moveJob: Job? = null
 
     private val _ready = MutableStateFlow(false)
 
@@ -258,9 +297,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ContextCompat.registerReceiver(app, packageReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
 
         load(fromCache = true)
+        refreshHistory(force = true)
         prepareFirstScreen()
         verifyOutputFolder()
         viewModelScope.launch { exporter.trimShareCache() }
+        // Deletions whose undo window was cut short by the app closing.
+        viewModelScope.launch {
+            historyRepo.purge()
+            releaseUnusedFolders()
+        }
         autoBackup.schedule()
     }
 
@@ -442,7 +487,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun runTask(kind: TaskKind, packages: Collection<String>, splitMode: SplitMode? = null) {
-        if (_task.value !is TaskState.Idle) return
+        if (_task.value !is TaskState.Idle || _move.value is MoveState.Moving) return
         val byPkg = allApps.value.orEmpty().associateBy { it.packageName }
         // Keep the list's order so batch progress feels natural.
         val ordered = listState.value.apps.filter { it.packageName in packages }
@@ -580,7 +625,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun shareHistory(entry: HistoryEntry) = viewModelScope.launch {
-        if (historyRepo.exists(entry)) shareFiles(listOf(entry.file)) else fileGone(entry)
+        if (ensureReadable(entry)) shareFiles(listOf(entry.file))
+    }
+
+    /** Re-checks the saved files: on start and each time the app comes back. Throttled inside the repository. */
+    fun refreshHistory(force: Boolean = false) {
+        viewModelScope.launch { historyRepo.refreshAvailability(force) }
+    }
+
+    /**
+     * Checks a saved file is still there before it is shared or installed. A missing file is dropped from
+     * History, since nothing can be done with it. An unreachable folder only reports: the file may be fine.
+     */
+    suspend fun ensureReadable(entry: HistoryEntry): Boolean = when (historyRepo.checkNow(entry)) {
+        Availability.Available -> true
+        Availability.Missing -> {
+            fileGone(entry)
+            false
+        }
+
+        Availability.FolderUnreachable -> {
+            _events.trySend(UiEvent.Message("Can't reach ${entry.location}. Check that the folder is still there."))
+            false
+        }
     }
 
     private fun fileGone(entry: HistoryEntry) {
@@ -588,18 +655,61 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _events.trySend(UiEvent.Message("That file was moved or deleted"))
     }
 
-    /** Removes an entry (the file itself stays on disk); it can be put back from the snackbar. */
-    fun removeHistory(entry: HistoryEntry) {
-        historyRepo.remove(entry.id)
-        _events.trySend(UiEvent.Undoable("Removed ${entry.label} from history") { historyRepo.restore(listOf(entry)) })
+    /** Takes the missing files off History. Nothing is on disk to delete, and Undo brings them back. */
+    fun removeMissing() {
+        val gone = historyRepo.missingEntries()
+        if (gone.isEmpty()) return
+        historyRepo.discard(gone, deleteFiles = false)
+        _events.trySend(
+            UiEvent.Undoable(
+                if (gone.size == 1) "Removed 1 missing file" else "Removed ${gone.size} missing files",
+                undo = {
+                    historyRepo.restore(gone)
+                    refreshHistory(force = true)
+                },
+                commit = { purge(gone) },
+            ),
+        )
     }
 
-    fun clearHistory() {
+    /** Deletes a saved file. It is only deleted once the snackbar's undo window has passed. */
+    fun deleteSaved(entry: HistoryEntry) {
+        historyRepo.discard(listOf(entry), deleteFiles = true)
+        _events.trySend(
+            UiEvent.Undoable(
+                "Deleted ${entry.label} ${versionLabelOf(entry.versionName)}",
+                undo = { historyRepo.restore(listOf(entry)) },
+                commit = { purge(listOf(entry)) },
+            ),
+        )
+    }
+
+    /** Empties History; with [deleteFiles], the saved files are deleted too (after the undo window). */
+    fun clearHistory(deleteFiles: Boolean) {
         val removed = history.value
         if (removed.isEmpty()) return
-        historyRepo.clear()
-        _events.trySend(UiEvent.Undoable("History cleared") { historyRepo.restore(removed) })
+        historyRepo.discard(removed, deleteFiles)
+        val n = removed.size
+        _events.trySend(
+            UiEvent.Undoable(
+                when {
+                    !deleteFiles -> "History cleared. Files kept"
+                    n == 1 -> "Deleted 1 file"
+                    else -> "Deleted $n files"
+                },
+                undo = { historyRepo.restore(removed) },
+                commit = { purge(removed) },
+            ),
+        )
     }
+
+    private fun purge(entries: List<HistoryEntry>) = viewModelScope.launch {
+        historyRepo.purge(entries.map { it.id })
+        releaseUnusedFolders()
+    }
+
+    private fun versionLabelOf(version: String) =
+        version.trim().let { if (it.startsWith("v", ignoreCase = true)) it else "v$it" }
 
     // ---------------------------------------------------------------------------------------------
     // Settings
@@ -622,15 +732,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _events.trySend(UiEvent.Message("Can't use that folder. Pick another one."))
             return
         }
-        val previous = settings.value.outputTreeUri
-        if (previous != null && previous != tree.toString()) releaseTree(previous)
         val name = exporter.folderName(tree) ?: tree.lastPathSegment?.substringAfterLast(':') ?: "Selected folder"
         settingsRepo.update { it.copy(outputTreeUri = tree.toString(), outputFolderName = name) }
+        // The previous folder stays accessible while History still has files there.
+        offerMove()
+        releaseUnusedFolders()
     }
 
     fun resetOutputFolder() {
-        settings.value.outputTreeUri?.let(::releaseTree)
+        if (settings.value.outputTreeUri == null) return
         clearOutputFolder()
+        offerMove()
+        releaseUnusedFolders()
     }
 
     private fun clearOutputFolder() {
@@ -648,14 +761,126 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Persisted grants are capped per app (128–512), so release ones we no longer use. */
-    private fun releaseTree(uri: String) {
-        runCatching {
-            getApplication<Application>().contentResolver.releasePersistableUriPermission(
-                Uri.parse(uri),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+    /**
+     * Persisted grants are capped per app (128–512), so release folders nothing uses any more: not
+     * the save folder, and no file in History (or waiting to be deleted) is in them.
+     */
+    private fun releaseUnusedFolders() {
+        val resolver = getApplication<Application>().contentResolver
+        val inUse = buildSet {
+            settings.value.outputTreeUri?.let(::add)
+            history.value.mapNotNullTo(this) { it.treeUri }
+            addAll(historyRepo.trashedFolders())
+        }.mapTo(HashSet()) { Uri.parse(it) }
+        // A move in progress still reads from the folders it moves out of.
+        if (_move.value is MoveState.Moving) return
+        for (grant in resolver.persistedUriPermissions) {
+            if (grant.uri in inUse) continue
+            runCatching {
+                resolver.releasePersistableUriPermission(
+                    grant.uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Moving saved files to a new save folder
+    // ---------------------------------------------------------------------------------------------
+
+    /** After the save folder changed: offers to move saved files that are elsewhere into it. */
+    private fun offerMove() {
+        moveJob?.cancel()
+        _move.value = MoveState.Idle
+        moveJob = viewModelScope.launch {
+            val target = settings.value.outputTreeUri
+            val to = settings.value.outputFolderName ?: ApkExporter.DEFAULT_LOCATION
+            // Only files that are really there (not deleted meanwhile, folder still accessible).
+            val candidates = history.value
+                .filter { it.treeUri != target && it.id !in missingIds.value }
+                .filter { historyRepo.checkNow(it) == Availability.Available }
+            if (candidates.isEmpty()) return@launch
+            val folders = candidates.map { it.location }.distinct()
+            _move.value = MoveState.Offer(
+                entries = candidates,
+                bytes = candidates.sumOf { it.sizeBytes.coerceAtLeast(0) },
+                from = folders.singleOrNull() ?: "${folders.size} folders",
+                to = to,
             )
         }
+    }
+
+    fun startMove() {
+        val offer = _move.value as? MoveState.Offer ?: return
+        if (_task.value !is TaskState.Idle) {
+            _events.trySend(UiEvent.Message("Wait for the current task to finish"))
+            return
+        }
+        moveJob?.cancel()
+        moveJob = viewModelScope.launch(Dispatchers.IO) {
+            // Pending deletions first: a file waiting to be deleted must not be taken for a copy.
+            historyRepo.purge()
+            val target = settings.value.outputTreeUri
+            val to = offer.to
+            // Entries may have been deleted or saved again since the offer was made.
+            val live = history.value.associateBy { it.id }
+            val entries = offer.entries.mapNotNull { live[it.id] }.filter { it.treeUri != target }
+            if (entries.isEmpty()) {
+                _move.value = MoveState.Done(0, emptyList(), to, cancelled = false)
+                return@launch
+            }
+            val total = entries.sumOf { it.sizeBytes.coerceAtLeast(0) }
+            val failed = mutableListOf<Pair<String, String>>()
+            var moved = 0
+            var completed = 0L
+            var lastEmit = 0L
+            try {
+                for ((i, entry) in entries.withIndex()) {
+                    var done = completed
+                    _move.value = MoveState.Moving(i, entries.size, entry.fileName, done, total, offer.from, to)
+                    try {
+                        val file = savedFiles.move(entry, target, to, exporter) { n ->
+                            done += n
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastEmit >= PROGRESS_INTERVAL_MS) {
+                                lastEmit = now
+                                _move.update { s -> if (s is MoveState.Moving) s.copy(bytesDone = done) else s }
+                            }
+                        }
+                        // The file is in its new place: record it even if Cancel was tapped just now.
+                        withContext(NonCancellable) { historyRepo.relocate(entry.id, file, target) }
+                        moved++
+                    } catch (e: ExportException) {
+                        failed += entry.fileName to (e.message ?: "Couldn't move it")
+                        if (e.message == ApkExporter.FOLDER_LOST) {
+                            entries.drop(i + 1).mapTo(failed) { it.fileName to e.message!! }
+                            break
+                        }
+                    }
+                    completed += entry.sizeBytes.coerceAtLeast(0)
+                }
+                _move.value = MoveState.Moving(entries.size, entries.size, "", total, total, offer.from, to)
+                delay(MOVE_DONE_HOLD_MS)
+                _move.value = MoveState.Done(moved, failed, to, cancelled = false)
+            } catch (e: CancellationException) {
+                _move.value = MoveState.Done(moved, failed, to, cancelled = true)
+                throw e
+            } finally {
+                releaseUnusedFolders()
+            }
+        }
+    }
+
+    fun cancelMove() {
+        if (_move.value is MoveState.Moving) moveJob?.cancel()
+    }
+
+    /** Closes the offer ("Keep them there") or the result. */
+    fun dismissMove() {
+        if (_move.value is MoveState.Moving) return
+        if (_move.value is MoveState.Offer) moveJob?.cancel()
+        _move.value = MoveState.Idle
     }
 
     fun refreshShareCacheSize() = viewModelScope.launch {
@@ -672,6 +897,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val PROGRESS_INTERVAL_MS = 33L
         const val SEARCH_DEBOUNCE_MS = 120L
         const val DONE_HOLD_MS = 450L
+        const val MOVE_DONE_HOLD_MS = 350L
         const val MIN_DIALOG_MS = 900L
         const val FIRST_SCREEN_BUDGET_MS = 1_200L
         const val FIRST_SCREEN_ICONS = 14

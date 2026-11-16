@@ -46,7 +46,7 @@ Extract, back up, share and install Android apps. Save any installed app as an A
 **Make it yours**
 - A clean, iOS-inspired design: frosted-glass bars, a floating tab bar, grouped lists and smooth spring animations.
 - Light, dark and pure black themes, nine accent colours or any colour from the built-in picker.
-- Saves to `Download/APK Extractor` or any folder you choose.
+- Saves to `Download/APK Extractor` or any folder you choose. When you change the folder in Settings, you can move your existing saved files there too. Moves can be stopped part way, and files that can't move stay where they were.
 - Long-press the app icon for shortcuts: **Install APK** and **Back up apps**.
 
 Small (about 1.7 MB) and quick to open: the app list is cached between launches and the code is precompiled with a Baseline Profile.
@@ -71,3 +71,11 @@ Open the project in Android Studio, or run `./gradlew assembleDebug`.
 Store-ready screenshots (1080×1920) and a feature graphic (1024×500) are in [`docs/images/store`](docs/images/store).
 
 Development happens on `main`. Every push to `production` is tested and built by GitHub Actions. When `versionName` in `app/build.gradle.kts` is new, a signed APK is published as a GitHub release. See [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+### Releasing a new version
+
+1. Bump `versionName` and `versionCode` in `app/build.gradle.kts` (`versionCode` must go up by one each release).
+2. Add release notes at `.github/release-notes/v<versionName>.md`.
+3. Merge `main` into `production` and push it. The workflow builds, signs and publishes the release.
+
+Pushing `main` alone does not publish anything. Changes to only `.md` files or `docs/` don't trigger a release.

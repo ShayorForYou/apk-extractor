@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -77,6 +78,7 @@ import com.shayor.apkextractor.ui.components.relativeTime
 import com.shayor.apkextractor.ui.components.rememberFileSize
 import com.shayor.apkextractor.ui.components.scrolledUnderBar
 import com.shayor.apkextractor.ui.components.topBarHeight
+import kotlinx.coroutines.launch
 import com.shayor.apkextractor.ui.components.versionLabel
 import com.shayor.apkextractor.ui.theme.iosColors
 
@@ -123,6 +125,13 @@ fun HistoryScreen(
     var expanded by rememberSaveable { mutableStateOf(listOf<String>()) }
     val listState = rememberLazyListState()
     val collapsed by listState.scrolledUnderBar()
+    var confirmClear by rememberSaveable { mutableStateOf(false) }
+    val missingIds by vm.missingIds.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    // Install only after the file is confirmed to be there (it may have gone since the last check).
+    fun install(entry: HistoryEntry) {
+        scope.launch { if (vm.ensureReadable(entry)) onInstall(entry) }
+    }
 
     val items = remember(groups, expanded) {
         buildList {
@@ -167,12 +176,16 @@ fun HistoryScreen(
                     modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 7.dp),
                 )
             }
+            val gone = entries.count { it.id in missingIds }
+            if (gone > 0) {
+                item(key = "missing") { MissingBanner(gone, onRemove = vm::removeMissing) }
+            }
             if (entries.isNotEmpty()) {
                 itemsIndexed(items, key = { _, it -> it.key }) { i, item ->
                     val shape = groupItemShape(item.first, item.last)
                     when (item) {
                         is HistoryItem.Latest -> SwipeToRemove(
-                            onRemove = { vm.removeHistory(item.entry) },
+                            onRemove = { vm.deleteSaved(item.entry) },
                             shape = shape,
                             modifier = Modifier
                                 .animateItem()
@@ -180,7 +193,8 @@ fun HistoryScreen(
                         ) {
                             HistoryRow(
                                 entry = item.entry,
-                                onInstall = { onInstall(item.entry) },
+                                missing = item.entry.id in missingIds,
+                                onInstall = { install(item.entry) },
                                 onShare = { vm.shareHistory(item.entry) },
                             )
                         }
@@ -194,13 +208,14 @@ fun HistoryScreen(
                         )
 
                         is HistoryItem.Version -> SwipeToRemove(
-                            onRemove = { vm.removeHistory(item.entry) },
+                            onRemove = { vm.deleteSaved(item.entry) },
                             shape = shape,
                             modifier = Modifier.animateItem(),
                         ) {
                             VersionRow(
                                 entry = item.entry,
-                                onInstall = { onInstall(item.entry) },
+                                missing = item.entry.id in missingIds,
+                                onInstall = { install(item.entry) },
                                 onShare = { vm.shareHistory(item.entry) },
                             )
                         }
@@ -208,7 +223,7 @@ fun HistoryScreen(
                 }
                 item(key = "hint") {
                     Text(
-                        "Swipe a file to remove it from the list.",
+                        "Swipe a file to delete it.",
                         style = MaterialTheme.typography.bodySmall,
                         color = iosColors.secondaryLabel,
                         modifier = Modifier
@@ -251,11 +266,23 @@ fun HistoryScreen(
                         size = 32.dp,
                     )
                     Spacer(Modifier.width(4.dp))
-                    BarTextButton("Clear All", onClick = vm::clearHistory)
+                    BarTextButton("Clear All", onClick = { confirmClear = true })
                 }
             } else {
                 null
             },
+        )
+    }
+
+    if (confirmClear && entries.isNotEmpty()) {
+        val locations = remember(entries) { entries.map { it.location }.distinct() }
+        ClearHistorySheet(
+            count = entries.size,
+            bytes = remember(entries) { entries.sumOf { it.sizeBytes.coerceAtLeast(0) } },
+            location = locations.singleOrNull() ?: "${locations.size} folders",
+            onDelete = { vm.clearHistory(deleteFiles = true) },
+            onKeepFiles = { vm.clearHistory(deleteFiles = false) },
+            onDismiss = { confirmClear = false },
         )
     }
 }
@@ -286,7 +313,7 @@ private fun Modifier.topDivider(color: Color, inset: Dp) = drawBehind {
 
 /** An app's newest saved file, at the top of its card. Same actions as its older versions. */
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -> Unit) {
+private fun HistoryRow(entry: HistoryEntry, missing: Boolean, onInstall: () -> Unit, onShare: () -> Unit) {
     val p = iosColors
     Row(
         Modifier
@@ -306,12 +333,9 @@ private fun HistoryRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -
             )
             VersionLine(entry, MaterialTheme.typography.bodySmall, p.secondaryLabel)
             Spacer(Modifier.height(3.dp))
-            MetaLine(entry)
+            if (missing) MissingLine() else MetaLine(entry)
         }
-        Spacer(Modifier.width(8.dp))
-        TonalIconButton(Icons.Rounded.Share, "Share ${entry.fileName}", onClick = onShare, size = 30.dp)
-        Spacer(Modifier.width(8.dp))
-        PillButton("Install", onClick = onInstall)
+        if (!missing) RowActions(entry, onInstall = onInstall, onShare = onShare)
     }
 }
 
@@ -348,7 +372,7 @@ private fun VersionsToggle(count: Int, open: Boolean, shape: Shape, onClick: () 
 
 /** An older saved version of an app, inside its app's card. */
 @Composable
-private fun VersionRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -> Unit) {
+private fun VersionRow(entry: HistoryEntry, missing: Boolean, onInstall: () -> Unit, onShare: () -> Unit) {
     val p = iosColors
     Row(
         Modifier
@@ -360,12 +384,60 @@ private fun VersionRow(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -
     ) {
         Column(Modifier.weight(1f)) {
             VersionLine(entry, MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), p.label)
-            MetaLine(entry)
+            if (missing) MissingLine() else MetaLine(entry)
         }
-        Spacer(Modifier.width(8.dp))
-        TonalIconButton(Icons.Rounded.Share, "Share ${entry.fileName}", onClick = onShare, size = 30.dp)
-        Spacer(Modifier.width(8.dp))
-        PillButton("Install", onClick = onInstall)
+        if (!missing) RowActions(entry, onInstall = onInstall, onShare = onShare)
+    }
+}
+
+/** The share and install buttons of a row whose file is there. */
+@Composable
+private fun RowActions(entry: HistoryEntry, onInstall: () -> Unit, onShare: () -> Unit) {
+    Spacer(Modifier.width(8.dp))
+    TonalIconButton(Icons.Rounded.Share, "Share ${entry.fileName}", onClick = onShare, size = 30.dp)
+    Spacer(Modifier.width(8.dp))
+    PillButton("Install", onClick = onInstall)
+}
+
+/** Replaces a row's details when its file is gone. Only Delete (swipe) and Remove Missing apply. */
+@Composable
+private fun MissingLine() {
+    Text(
+        "File missing from its folder",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** Above the list when saved files are gone: says so, and takes them off History in one step. */
+@Composable
+private fun MissingBanner(count: Int, onRemove: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(groupItemShape(true, true))
+                .background(cellColor())
+                .padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (count == 1) "1 saved file is missing" else "$count saved files are missing",
+                style = MaterialTheme.typography.bodyMedium,
+                color = iosColors.label,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "Remove",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable(role = Role.Button, onClick = onRemove)
+                    .padding(start = 12.dp),
+            )
+        }
     }
 }
 

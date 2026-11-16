@@ -67,25 +67,58 @@ class ApkExporter(context: Context) {
         onProgress: (Long) -> Unit,
     ): ExportedFile = withPreparedSources(app, settings, onStage) { sources ->
         val name = FileNames.build(app, settings.nameFormat, sources.extension)
-        val tree = settings.outputTreeUri
-        val destination = when {
-            tree != null -> TreeDestination(
-                Uri.parse(tree), name, sources.mimeType, settings.outputFolderName ?: "selected folder",
-            )
+        val destination = storageDestination(
+            name, sources.mimeType, sources.totalBytes, settings.outputTreeUri, settings.outputFolderName,
+        )
+        write(destination) { out, channels -> writeSources(sources, out, channels, onProgress) }
+    }
+
+    /**
+     * Copies an already saved file ([source]) into a save folder: [tree], or the default folder when
+     * null. Used to move saved files when the save folder changes. Transactional like an export.
+     *
+     * Call it on a background thread. It deliberately doesn't switch threads itself: leaving
+     * withContext re-checks for cancellation, which would throw away a copy that was just committed.
+     * Cancellation is only honoured while copying, before anything is committed.
+     */
+    suspend fun copyToFolder(
+        source: Uri,
+        name: String,
+        mime: String,
+        sizeBytes: Long,
+        tree: String?,
+        folderName: String?,
+        onProgress: (Long) -> Unit,
+    ): ExportedFile {
+        val destination = storageDestination(name, mime, sizeBytes, tree, folderName)
+        return write(destination) { out, channels ->
+            val input = try {
+                resolver.openInputStream(source)
+            } catch (e: FileNotFoundException) {
+                throw ExportException(FILE_MISSING, e)
+            } catch (e: SecurityException) {
+                throw ExportException(FILE_MISSING, e)
+            } ?: throw ExportException(FILE_MISSING)
+            input.use { copyFrom(it, out, channels, onProgress) }
+        }
+    }
+
+    /** Where a file named [name] goes in the save folder [tree] (null = Download/APK Extractor). */
+    private fun storageDestination(name: String, mime: String, bytes: Long, tree: String?, folderName: String?): Destination =
+        when {
+            tree != null -> TreeDestination(Uri.parse(tree), name, mime, folderName ?: "selected folder")
 
             Build.VERSION.SDK_INT >= 29 -> {
-                ensureSpace(Environment.getExternalStorageDirectory(), sources.totalBytes)
-                MediaStoreDestination(name, sources.mimeType)
+                ensureSpace(Environment.getExternalStorageDirectory(), bytes)
+                MediaStoreDestination(name, mime)
             }
 
             else -> {
                 val dir = legacyDownloadsDir()
-                ensureSpace(dir, sources.totalBytes)
-                FileDestination(uniqueFile(dir, name), sources.mimeType, DEFAULT_LOCATION, scan = true)
+                ensureSpace(dir, bytes)
+                FileDestination(uniqueFile(dir, name), mime, DEFAULT_LOCATION, scan = true, requestedName = name)
             }
         }
-        write(sources, destination, onProgress)
-    }
 
     /** Creates a fresh, empty directory for files that are about to be shared. */
     suspend fun newShareDir(): File = withContext(Dispatchers.IO) {
@@ -103,7 +136,8 @@ class ApkExporter(context: Context) {
     ): ExportedFile = withPreparedSources(app, settings, onStage) { sources ->
         ensureSpace(dir, sources.totalBytes)
         val name = FileNames.build(app, settings.nameFormat, sources.extension)
-        write(sources, FileDestination(uniqueFile(dir, name), sources.mimeType, "cache", scan = false), onProgress)
+        val destination = FileDestination(uniqueFile(dir, name), sources.mimeType, "cache", scan = false, requestedName = name)
+        write(destination) { out, channels -> writeSources(sources, out, channels, onProgress) }
     }
 
     fun shareIntent(files: List<ExportedFile>): Intent {
@@ -221,14 +255,15 @@ class ApkExporter(context: Context) {
     // Writing
     // ---------------------------------------------------------------------------------------------
 
-    private suspend fun write(sources: Sources, dest: Destination, onProgress: (Long) -> Unit): ExportedFile {
+    /** Creates [dest], lets [body] fill it, and commits it; on any failure nothing is left behind. */
+    private suspend fun write(
+        dest: Destination,
+        body: suspend (out: OutputStream, allowChannels: Boolean) -> Unit,
+    ): ExportedFile {
         var committed = false
         try {
             dest.create()
-            dest.openStream().use { out ->
-                if (sources.isBundle) writeBundle(sources, out, onProgress)
-                else copyFile(sources.base, out, dest.supportsChannels, onProgress)
-            }
+            dest.openStream().use { out -> body(out, dest.supportsChannels) }
             return dest.commit().also { committed = true }
         } catch (e: Throwable) {
             throw when (e) {
@@ -241,6 +276,11 @@ class ApkExporter(context: Context) {
         } finally {
             if (!committed) withContext(NonCancellable) { runCatching { dest.discard() } }
         }
+    }
+
+    private suspend fun writeSources(sources: Sources, out: OutputStream, allowChannels: Boolean, onProgress: (Long) -> Unit) {
+        if (sources.isBundle) writeBundle(sources, out, onProgress)
+        else openSource(sources.base).use { copyFrom(it, out, allowChannels, onProgress) }
     }
 
     /** Writes an SAI-compatible .apks archive: base.apk + split_*.apk at the root. */
@@ -261,26 +301,29 @@ class ApkExporter(context: Context) {
         zip.flush()
     }
 
-    private suspend fun copyFile(file: File, out: OutputStream, allowChannels: Boolean, onProgress: (Long) -> Unit) {
-        openSource(file).use { input ->
-            if (allowChannels && out is FileOutputStream) {
-                // Kernel-level copy (sendfile) — much faster than shuffling bytes through the JVM.
-                val inCh = input.channel
-                val outCh = out.channel
-                val size = inCh.size()
-                var pos = 0L
-                while (pos < size) {
-                    currentCoroutineContext().ensureActive()
-                    val n = inCh.transferTo(pos, min(CHANNEL_CHUNK, size - pos), outCh)
-                    if (n <= 0) break
-                    pos += n
-                    onProgress(n)
-                }
-                if (pos >= size) return
-                inCh.position(pos) // fall through and finish with a plain stream copy
-            }
-            copyStream(input, out, onProgress)
+    private suspend fun copyFrom(input: InputStream, out: OutputStream, allowChannels: Boolean, onProgress: (Long) -> Unit) {
+        // Kernel-level copy (sendfile), much faster than shuffling bytes through the JVM. Only for
+        // regular files: a provider's stream may be a pipe, which reports no size (or throws).
+        val size = if (allowChannels && input is FileInputStream && out is FileOutputStream) {
+            runCatching { input.channel.size() }.getOrDefault(0L)
+        } else {
+            0L
         }
+        if (size > 0 && input is FileInputStream && out is FileOutputStream) {
+            val inCh = input.channel
+            val outCh = out.channel
+            var pos = 0L
+            while (pos < size) {
+                currentCoroutineContext().ensureActive()
+                val n = inCh.transferTo(pos, min(CHANNEL_CHUNK, size - pos), outCh)
+                if (n <= 0) break
+                pos += n
+                onProgress(n)
+            }
+            if (pos >= size) return
+            inCh.position(pos) // fall through and finish with a plain stream copy
+        }
+        copyStream(input, out, onProgress)
     }
 
     private suspend fun copyStream(input: InputStream, out: OutputStream, onProgress: (Long) -> Unit) {
@@ -325,7 +368,7 @@ class ApkExporter(context: Context) {
         }
     }
 
-    private fun legacyDownloadsDir(): File {
+    internal fun legacyDownloadsDir(): File {
         if (Environment.getExternalStorageState() != Environment.MEDIA_MOUNTED) {
             throw ExportException("Storage isn't available right now")
         }
@@ -405,7 +448,7 @@ class ApkExporter(context: Context) {
         override fun commit(): ExportedFile {
             val u = requireNotNull(uri)
             resolver.update(u, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
-            return ExportedFile(u, queryDisplayName(u) ?: name, mime, DEFAULT_LOCATION)
+            return ExportedFile(u, queryDisplayName(u) ?: name, mime, DEFAULT_LOCATION, requestedName = name)
         }
 
         override fun discard() {
@@ -444,7 +487,7 @@ class ApkExporter(context: Context) {
 
         override fun commit(): ExportedFile {
             val d = requireNotNull(doc)
-            return ExportedFile(d, queryDisplayName(d) ?: name, mime, label)
+            return ExportedFile(d, queryDisplayName(d) ?: name, mime, label, requestedName = name)
         }
 
         override fun discard() {
@@ -457,6 +500,7 @@ class ApkExporter(context: Context) {
         val mime: String,
         val label: String,
         val scan: Boolean,
+        val requestedName: String,
     ) : Destination() {
         override fun create() {
             file.parentFile?.mkdirs()
@@ -467,7 +511,7 @@ class ApkExporter(context: Context) {
 
         override fun commit(): ExportedFile {
             if (scan) MediaScannerConnection.scanFile(context, arrayOf(file.path), arrayOf(mime), null)
-            return ExportedFile(FileProvider.getUriForFile(context, authority, file), file.name, mime, label)
+            return ExportedFile(FileProvider.getUriForFile(context, authority, file), file.name, mime, label, requestedName)
         }
 
         override fun discard() {
@@ -485,6 +529,7 @@ class ApkExporter(context: Context) {
         const val CANT_READ = "This app can't be extracted"
         const val CANT_SAVE = "Couldn't save the file"
         const val NO_SPACE = "Not enough storage space"
+        const val FILE_MISSING = "The file was moved or deleted"
 
         private const val TAG = "ApkExporter"
         private const val BUFFER_SIZE = 256 * 1024

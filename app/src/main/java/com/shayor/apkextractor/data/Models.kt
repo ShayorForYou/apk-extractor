@@ -77,13 +77,17 @@ data class Settings(
     val accent: Int? = null,
 )
 
-/** A file that was written successfully and can be shared via [uri]. */
+/**
+ * A file that was written successfully and can be shared via [uri]. [requestedName] is the name it
+ * was meant to have; storage appends " (1)" etc. to [displayName] when that name was already taken.
+ */
 @Immutable
 data class ExportedFile(
     val uri: Uri,
     val displayName: String,
     val mimeType: String,
     val location: String,
+    val requestedName: String = displayName,
 )
 
 /** An export failure with a message that is safe to show to the user. */

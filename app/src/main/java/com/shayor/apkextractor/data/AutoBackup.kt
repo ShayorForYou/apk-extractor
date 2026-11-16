@@ -147,10 +147,11 @@ class AutoBackup private constructor(private val context: Context) {
                 if (!store.isDue(app)) continue
                 // This app's own format, if it has one; otherwise the Settings default.
                 val settings = store.formatFor(pkg)?.let { defaults.copy(splitMode = it) } ?: defaults
-                // Already saved this exact version (e.g. extracted by hand)? Nothing to do.
+                // Already saved this exact version (e.g. extracted by hand) and the file is still there? Nothing to do.
+                // A saved copy that was deleted is saved again.
                 val extension = if (app.isSplit && settings.splitMode == SplitMode.BUNDLE) "apks" else "apk"
                 val saved = history.findSaved(app, extension)
-                if (saved != null && history.exists(saved)) {
+                if (saved != null && history.checkNow(saved) == Availability.Available) {
                     store.markDone(app)
                     continue
                 }

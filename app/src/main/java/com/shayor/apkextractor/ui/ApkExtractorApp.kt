@@ -207,6 +207,11 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) { installVm.refreshPermission() }
     }
 
+    // Files may have been deleted or moved in a file manager while the app was away.
+    LaunchedEffect(vm, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) { vm.refreshHistory() }
+    }
+
     // One-shot events are only handled while the UI is visible.
     LaunchedEffect(vm, lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -225,13 +230,22 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                         ) ?: UNDO_WINDOW_MS
                         val visuals = UndoVisuals(event.text, timeout)
                         launch {
-                            val timer = launch {
-                                delay(timeout)
-                                if (snackbar.currentSnackbarData?.visuals === visuals) snackbar.currentSnackbarData?.dismiss()
+                            var undone = false
+                            try {
+                                val timer = launch {
+                                    delay(timeout)
+                                    if (snackbar.currentSnackbarData?.visuals === visuals) snackbar.currentSnackbarData?.dismiss()
+                                }
+                                val result = snackbar.showSnackbar(visuals)
+                                timer.cancel()
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    undone = true
+                                    event.undo()
+                                }
+                            } finally {
+                                // Timed out, replaced by another message, or the app was left: final.
+                                if (!undone) event.commit()
                             }
-                            val result = snackbar.showSnackbar(visuals)
-                            timer.cancel()
-                            if (result == SnackbarResult.ActionPerformed) event.undo()
                         }
                     }
 

@@ -67,6 +67,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
@@ -245,26 +247,30 @@ fun PrimaryButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     height: Dp = 50.dp,
+    /** Fill; e.g. red for a destructive action. The label is then white. */
+    color: Color = Color.Unspecified,
 ) {
     val colors = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
+    val fill = color.takeOrElse { colors.primary }
+    val content = if (color.isSpecified) Color.White else colors.onPrimary
     Row(
         modifier
             .height(height)
             .pressScale(source)
             .dimWhilePressed(source)
             .clip(CircleShape)
-            .background(colors.primary)
+            .background(fill)
             .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(19.dp))
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(19.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, style = MaterialTheme.typography.titleMedium, color = colors.onPrimary, maxLines = 1)
+        Text(text, style = MaterialTheme.typography.titleMedium, color = content, maxLines = 1)
     }
 }
 
