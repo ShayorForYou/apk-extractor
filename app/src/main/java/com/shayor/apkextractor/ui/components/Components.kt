@@ -1,5 +1,52 @@
 package com.shayor.apkextractor.ui.components
 
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import kotlinx.coroutines.CoroutineScope
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.PriorityHigh
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
+import androidx.compose.foundation.border
+import com.shayor.apkextractor.ui.theme.JakartaSans
 import android.text.format.DateUtils
 import android.text.format.Formatter
 import androidx.compose.animation.animateColorAsState
@@ -169,18 +216,22 @@ fun relativeTime(time: Long): String {
     return DateUtils.getRelativeTimeSpanString(time, now, DateUtils.MINUTE_IN_MILLIS).toString()
 }
 
-/** App icon loaded asynchronously at the exact pixel size it is drawn at. */
+/**
+ * App icon loaded asynchronously at the exact pixel size it is drawn at. For a saved file, pass its
+ * [backupUri]: the icon then still shows after the app is uninstalled.
+ */
 @Composable
 fun AppIcon(
     packageName: String,
     iconKey: String,
     size: Dp,
     modifier: Modifier = Modifier,
+    backupUri: String? = null,
 ) {
     val context = LocalContext.current
     val px = with(LocalDensity.current) { size.roundToPx() }
     val bitmap by produceState(AppIcons.cached(iconKey, px), iconKey, px) {
-        if (value == null) value = AppIcons.load(context, packageName, iconKey, px)
+        if (value == null) value = AppIcons.load(context, packageName, iconKey, px, backupUri)
     }
     Box(modifier.size(size), contentAlignment = Alignment.Center) {
         val b = bitmap
@@ -219,6 +270,7 @@ fun Panel(
         modifier
             .clip(shape)
             .background(color)
+            .border(1.dp, iosColors.separator, shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) { content() }
 }
@@ -291,7 +343,7 @@ fun SecondaryButton(
             .pressScale(source)
             .dimWhilePressed(source)
             .clip(CircleShape)
-            .background(colors.primary.copy(alpha = if (iosColors.dark) 0.20f else 0.12f))
+            .background(colors.primary.copy(alpha = if (iosColors.dark) 0.16f else 0.10f))
             .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -323,6 +375,7 @@ fun TonalIconButton(
             .dimWhilePressed(source)
             .clip(CircleShape)
             .background(iosColors.tertiaryFill)
+            .border(1.dp, iosColors.separator, CircleShape)
             .clickable(
                 interactionSource = source,
                 indication = null,
@@ -343,11 +396,11 @@ fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     val source = remember { MutableInteractionSource() }
     Row(
         modifier
-            .height(30.dp)
+            .height(32.dp)
             .pressScale(source, pressed = 0.9f)
             .dimWhilePressed(source)
             .clip(CircleShape)
-            .background(iosColors.tertiaryFill)
+            .background(colors.primary.copy(alpha = if (iosColors.dark) 0.16f else 0.10f))
             .clickable(source, indication = null, role = Role.Button, onClick = onClick)
             .padding(horizontal = if (icon != null && text.isEmpty()) 13.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -362,91 +415,278 @@ fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     }
 }
 
-private val PillStyle = TextStyle(fontSize = 15.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
+private val PillStyle = TextStyle(fontFamily = JakartaSans, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
 
 // -------------------------------------------------------------------------------------------------
 // Toasts — glass capsules
 // -------------------------------------------------------------------------------------------------
 
 /** Snackbar content for an undoable action; [durationMs] drives the draining progress line. */
-class UndoVisuals(override val message: String, val durationMs: Long) : SnackbarVisuals {
+class UndoVisuals(
+    override val message: String,
+    val durationMs: Long,
+    val tone: ToastTone = ToastTone.Removed,
+) : SnackbarVisuals {
     override val actionLabel: String = "Undo"
     override val withDismissAction: Boolean = false
     override val duration: SnackbarDuration = SnackbarDuration.Indefinite // timed by the caller
 }
 
 /**
- * A glass capsule: the message, an optional action, and (when undoable) a thin line along the
- * bottom that drains over the time left. Only the line animates (draw phase).
+ * What a toast is telling you, shown by its leading glyph. [Deleted] is for files gone from disk
+ * (muted red trash); [Removed] is for entries taken off a list with nothing deleted (gray).
+ */
+enum class ToastTone { Info, Success, Warning, Deleted, Removed }
+
+/** A plain message with a [tone]. */
+class ToastVisuals(override val message: String, val tone: ToastTone) : SnackbarVisuals {
+    override val actionLabel: String? = null
+    override val withDismissAction: Boolean = false
+    override val duration: SnackbarDuration = SnackbarDuration.Short
+}
+
+/** Shows [text] as a toast with a [tone] glyph. */
+suspend fun SnackbarHostState.toast(text: String, tone: ToastTone = ToastTone.Info) =
+    showSnackbar(ToastVisuals(text, tone))
+
+/**
+ * A glass pill that hugs its message: a tone glyph, the text, and for an undoable change an
+ * "Undo" button ringed by the time left. Rises in on a spring, fades out, and can be swiped
+ * aside. Only the ring and the swipe animate after it lands (draw and layout phases).
  */
 @Composable
-private fun GlassToast(data: SnackbarData, undo: UndoVisuals?) {
+private fun GlassToast(data: SnackbarData) {
+    val p = iosColors
     val accent = MaterialTheme.colorScheme.primary
+    val undo = data.visuals as? UndoVisuals
+    val tone = undo?.tone ?: (data.visuals as? ToastVisuals)?.tone ?: ToastTone.Info
     val remaining = remember(data) { Animatable(1f) }
     if (undo != null) {
         LaunchedEffect(data) { remaining.animateTo(0f, tween(undo.durationMs.toInt(), easing = LinearEasing)) }
     }
+    val (glyph, toneColor) = when (tone) {
+        ToastTone.Success -> Icons.Rounded.Check to p.green
+        ToastTone.Warning -> Icons.Rounded.PriorityHigh to p.orange
+        ToastTone.Deleted -> Icons.Rounded.Delete to p.red
+        ToastTone.Removed -> Icons.Rounded.Delete to p.gray
+        ToastTone.Info -> Icons.Rounded.Info to accent
+    }
+    // Over a sheet the toast would share the sheet's colour: lift it a step so it reads on top.
+    val onSheet = LocalToastOnSheet.current
+    val base = if (onSheet) lerp(p.sheet, if (p.dark) Color.White else Color.Black, if (p.dark) 0.10f else 0.05f) else p.glassTint
+    val wash = remember(toneColor, p.dark) {
+        Brush.horizontalGradient(0f to toneColor.copy(alpha = if (p.dark) 0.20f else 0.12f), 0.65f to Color.Transparent)
+    }
+    val quiet = tone == ToastTone.Deleted || tone == ToastTone.Removed
+    val rim = when {
+        quiet -> if (p.dark) 0.22f else 0.18f
+        else -> if (p.dark) 0.38f else 0.30f
+    }
+    val swipe = remember(data) { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    // A capsule at one line; a softly rounded card if the message wraps.
     val shape = RoundedCornerShape(26.dp)
     Box(
         Modifier
             .padding(horizontal = Chrome.FloatingMargin)
-            .fillMaxWidth()
-            .glass(shape),
+            .widthIn(max = 440.dp)
+            .offset { IntOffset(swipe.value.roundToInt(), 0) }
+            .graphicsLayer { alpha = 1f - (abs(swipe.value) / (size.width.coerceAtLeast(1f) * 0.8f)).coerceIn(0f, 1f) }
+            .draggable(
+                rememberDraggableState { delta -> scope.launch { swipe.snapTo(swipe.value + delta) } },
+                Orientation.Horizontal,
+                onDragStopped = { velocity ->
+                    val far = abs(swipe.value) > with(density) { 96.dp.toPx() } || abs(velocity) > 1800f
+                    if (far) {
+                        val direction = if (swipe.value + velocity * 0.05f >= 0f) 1f else -1f
+                        swipe.animateTo(direction * with(density) { 480.dp.toPx() }, tween(160))
+                        data.dismiss()
+                    } else {
+                        swipe.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = 600f))
+                    }
+                },
+            )
+            .semantics { liveRegion = LiveRegionMode.Polite }
+            .glass(shape, tint = base)
+            // A wash of the tone's colour from the glyph's side, and a rim of it round the edge.
+            .background(wash)
+            // Softer for removals, so a delete reads as "gone, undo if you like", not as an error.
+            .border(1.dp, toneColor.copy(alpha = rim), shape),
     ) {
         Row(
             Modifier
-                .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp)
-                .height(40.dp),
+                .heightIn(min = 52.dp)
+                .padding(start = 10.dp, end = if (undo != null) 8.dp else 20.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val tint = toneColor
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(tint.copy(alpha = if (p.dark) 0.20f else 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(glyph, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp)) }
+            Spacer(Modifier.width(10.dp))
             Text(
                 data.visuals.message,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                 maxLines = 2,
-                modifier = Modifier.weight(1f),
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
-            val action = data.visuals.actionLabel
-            if (action != null) {
-                Spacer(Modifier.width(10.dp))
+            if (undo != null) {
+                Spacer(Modifier.width(12.dp))
                 Row(
                     Modifier
-                        .height(34.dp)
+                        .height(36.dp)
                         .clip(CircleShape)
                         .background(accent.copy(alpha = 0.14f))
                         .clickable(role = Role.Button, onClick = data::performAction)
-                        .padding(start = 12.dp, end = 14.dp),
+                        .padding(start = 6.dp, end = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (undo != null) {
-                        Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = null, tint = accent, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(5.dp))
-                    }
-                    Text(action, style = MaterialTheme.typography.labelLarge, color = accent)
+                    // The arrow inside a ring that drains over the time left to undo.
+                    Box(
+                        Modifier
+                            .size(26.dp)
+                            .drawBehind {
+                                val stroke = 2.dp.toPx()
+                                val arc = Size(size.width - stroke, size.height - stroke)
+                                val topLeft = Offset(stroke / 2, stroke / 2)
+                                drawArc(accent.copy(alpha = 0.22f), 0f, 360f, false, topLeft, arc, style = Stroke(stroke))
+                                drawArc(accent, -90f, 360f * remaining.value, false, topLeft, arc, style = Stroke(stroke, cap = StrokeCap.Round))
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = null, tint = accent, modifier = Modifier.size(14.dp)) }
+                    Spacer(Modifier.width(6.dp))
+                    Text(undo.actionLabel, style = MaterialTheme.typography.labelLarge, color = accent)
                 }
             }
-        }
-        if (undo != null) {
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 24.dp)
-                    .fillMaxWidth()
-                    .height(2.dp)
-                    .drawBehind {
-                        drawRoundRect(
-                            accent,
-                            size = Size(size.width * remaining.value, size.height),
-                            cornerRadius = CornerRadius(size.height),
-                        )
-                    },
-            )
         }
     }
 }
 
+/**
+ * Where toasts are shown. The app's own host draws them over the screens; a sheet (its own window,
+ * above the app) registers a layer while it's open, and the topmost layer draws them instead, so a
+ * toast is never hidden behind a sheet and never shows twice.
+ */
+object ToastCenter {
+    internal var state by mutableStateOf<SnackbarHostState?>(null)
+    internal var scope: CoroutineScope? = null
+    internal val layers = mutableStateListOf<Any>()
+
+    /** True while a sheet's layer is showing the toasts instead of the app's host. */
+    val coveredBySheet: Boolean get() = layers.isNotEmpty()
+
+    /** Shows [text] from anywhere (no coroutine needed), replacing the current toast. */
+    fun show(text: String, tone: ToastTone = ToastTone.Info): Boolean {
+        val host = state ?: return false
+        val launcher = scope ?: return false
+        launcher.launch {
+            host.currentSnackbarData?.dismiss()
+            host.toast(text, tone)
+        }
+        return true
+    }
+}
+
+/** Makes [state] the app's toast host for [ToastCenter.show] and sheet layers. */
+@Composable
+fun ProvideToasts(state: SnackbarHostState) {
+    val scope = rememberCoroutineScope()
+    DisposableEffect(state, scope) {
+        ToastCenter.state = state
+        ToastCenter.scope = scope
+        onDispose {
+            if (ToastCenter.state === state) {
+                ToastCenter.state = null
+                ToastCenter.scope = null
+            }
+        }
+    }
+}
+
+/**
+ * Called inside a sheet: while it is the top sheet, shows the toasts in a small floating layer on
+ * its window, at the bottom of the screen. The layer wraps the toast, so the rest of the sheet
+ * stays touchable.
+ */
+@Composable
+fun ToastLayer() {
+    val state = ToastCenter.state ?: return
+    val token = remember { Any() }
+    DisposableEffect(Unit) {
+        ToastCenter.layers += token
+        onDispose { ToastCenter.layers -= token }
+    }
+    if (ToastCenter.layers.lastOrNull() !== token) return
+    val density = LocalDensity.current
+    val bottom = WindowInsets.navigationBars.getBottom(density) + with(density) { 12.dp.roundToPx() }
+    Popup(
+        popupPositionProvider = remember(bottom) { BottomCenterPosition(bottom) },
+        properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false, clippingEnabled = false),
+    ) {
+        // The blurred backdrop belongs to the app's window, not this one: use the solid glass fill.
+        CompositionLocalProvider(LocalGlassState provides null, LocalToastOnSheet provides true) {
+            AppSnackbarHost(state, Modifier.padding(top = 16.dp))
+        }
+    }
+}
+
+/** True for toasts drawn in a sheet's layer. */
+private val LocalToastOnSheet = staticCompositionLocalOf { false }
+
+private class BottomCenterPosition(private val bottom: Int) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ) = IntOffset((windowSize.width - popupContentSize.width) / 2, windowSize.height - popupContentSize.height - bottom)
+}
+
+/**
+ * Shows the current toast centred above whatever sits below it. A replacement crossfades in place.
+ * Plain toasts time out like Material's short snackbar (longer with accessibility services on);
+ * undoable ones are timed by their caller.
+ */
 @Composable
 fun AppSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
-    SnackbarHost(state, modifier) { data -> GlassToast(data, data.visuals as? UndoVisuals) }
+    val data = state.currentSnackbarData
+    val accessibility = LocalAccessibilityManager.current
+    LaunchedEffect(data) {
+        if (data == null) return@LaunchedEffect
+        val base = when (data.visuals.duration) {
+            SnackbarDuration.Short -> 4000L
+            SnackbarDuration.Long -> 10000L
+            SnackbarDuration.Indefinite -> return@LaunchedEffect
+        }
+        delay(
+            accessibility?.calculateRecommendedTimeoutMillis(
+                base, containsIcons = true, containsText = true, containsControls = data.visuals.actionLabel != null,
+            ) ?: base,
+        )
+        data.dismiss()
+    }
+    AnimatedContent(
+        targetState = data,
+        transitionSpec = {
+            (
+                slideInVertically(spring(dampingRatio = 0.72f, stiffness = 520f)) { it } +
+                    scaleIn(spring(dampingRatio = 0.72f, stiffness = 520f), initialScale = 0.88f) +
+                    fadeIn(tween(160))
+                ) togetherWith (fadeOut(tween(140)) + scaleOut(tween(160), targetScale = 0.94f)) using
+                SizeTransform(clip = false)
+        },
+        contentAlignment = Alignment.BottomCenter,
+        label = "toast",
+        modifier = modifier,
+    ) { current ->
+        if (current != null) GlassToast(current) else Box(Modifier)
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -503,24 +743,24 @@ fun <T> SegmentedControl(
     selected: T,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
-    height: Dp = 34.dp,
+    height: Dp = 38.dp,
     content: @Composable (option: T, active: Boolean) -> Unit,
 ) {
     val p = iosColors
     val index = options.indexOf(selected).coerceAtLeast(0)
-    val thumbColor = if (p.dark) Color(0xFF636366) else Color.White
+    val thumbColor = if (p.dark) Color(0xFF2A2F3A) else Color.White
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
             .height(height)
             .clip(CircleShape)
-            .background(p.tertiaryFill)
-            .padding(2.dp),
+            .background(if (p.dark) Color(0xFF1A1E26) else Color(0xFFECEEF3))
+            .padding(3.dp),
     ) {
         val segment = maxWidth / options.size
         val offset by animateDpAsState(
             segment * index,
-            spring(dampingRatio = 0.78f, stiffness = 520f),
+            spring(dampingRatio = 0.75f, stiffness = 450f),
             label = "thumb",
         )
         Box(
@@ -557,7 +797,7 @@ fun <T> SegmentedControl(
 @Composable
 fun SegmentLabel(text: String, active: Boolean, icon: ImageVector? = null) {
     val p = iosColors
-    val tint by animateColorAsState(if (active) p.label else p.label.copy(alpha = 0.8f), label = "seg")
+    val tint by animateColorAsState(if (active) p.label else p.tertiaryLabel, label = "seg")
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(15.dp))
@@ -565,9 +805,7 @@ fun SegmentLabel(text: String, active: Boolean, icon: ImageVector? = null) {
         }
         Text(
             text,
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-            ),
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
             color = tint,
             maxLines = 1,
         )

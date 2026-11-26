@@ -59,7 +59,7 @@ data class PackageToInstall(
     val minSdk: Int,
     val icon: ImageBitmap?,
     /** base.apk first, then its splits (already filtered for this device's CPU). */
-    val files: List<File>,
+    val parts: List<ApkPart>,
     /** APKs plus game data. */
     val totalBytes: Long,
     /** Game data to copy next to the app (XAPK only); read from [source] only when installing. */
@@ -75,16 +75,34 @@ data class PackageToInstall(
      * its data kept. That copy still decides which signature and version Android accepts.
      */
     val installedElsewhere: Boolean = false,
+    /** The new APK's signers (see [ApkSignatures]); empty if unknown. */
     internal val certs: Set<String>,
-    internal val baseFile: File,
     internal val source: Uri? = null,
 ) {
-    val isBundle get() = files.size > 1
+    val isBundle get() = parts.size > 1
     val hasObb get() = obbs.isNotEmpty()
     val obbBytes get() = obbs.sumOf { it.size.coerceAtLeast(0) }
     val isInstalled get() = installedVersionCode != null
     val isDowngrade get() = installedVersionCode != null && versionCode < installedVersionCode
     val needsNewerAndroid get() = minSdk > Build.VERSION.SDK_INT
+}
+
+/**
+ * One APK to write into the install session, read from where it already is: the picked file
+ * itself, an entry of the bundle it's in, or (only when the source can't be read twice) a copy.
+ */
+@Immutable
+data class ApkPart(val name: String, val size: Long, internal val from: PartSource)
+
+sealed interface PartSource {
+    /** The whole document is the APK. */
+    data class Document(val uri: Uri) : PartSource
+
+    /** An entry of the bundle at [uri]. */
+    data class Entry(val uri: Uri, val entry: String) : PartSource
+
+    /** A copy in the app's cache. */
+    data class Local(val file: File) : PartSource
 }
 
 /** Result of a PackageInstaller session, delivered by [InstallResultReceiver]. */
@@ -116,79 +134,173 @@ class ApkInstaller(private val context: Context) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls()
 
     /**
-     * Reads the app inside [uri]. Bundles are read with random access when the source allows it (or
-     * streamed in one pass otherwise): only the APKs for this device's CPU are extracted, and game
-     * data (OBB) is just listed, then copied straight from the source when installing. Only the
-     * base APK is parsed, and signatures are only checked when the app is already installed (that
-     * check hashes the whole APK, so it is skipped when not needed).
+     * Reads the app inside [uri] without copying it. When the source can be read with random
+     * access (nearly always), only the manifest, resource table and res/ of the base APK are
+     * copied, into a small stand-in that PackageManager reads the name, version and icon from, and
+     * the signers are read from the signature block. Nothing else is read until installing, when
+     * the APKs are streamed straight from the source. Sources that can only be read once (a pipe)
+     * are copied, as before.
      */
     suspend fun read(uri: Uri, iconPx: Int): PackageToInstall = withContext(Dispatchers.IO) {
         clear()
-        val dir = File(workRoot, System.nanoTime().toString()).apply { mkdirs() }
-        val bundle = try {
-            val name = displayName(uri).orEmpty().lowercase()
-            if (name.endsWith(".apk")) {
-                querySize(uri).let { if (it > 0) ensureSpace(it) }
-                Unpacked(listOf(copy(uri, File(dir, "base.apk"))))
-            } else {
-                // null = the zip is itself an APK (no recognisable extension).
-                unpackBundle(uri, dir) ?: Unpacked(listOf(copy(uri, File(dir, "base.apk"))))
+        val dir = newDir()
+        guarded(NOT_AN_APK) {
+            val direct = openZip(uri)?.let { zip ->
+                try {
+                    zip.use { readZip(uri, it, dir, iconPx) }
+                } catch (_: ZipException) {
+                    dir.listFiles()?.forEach { it.deleteRecursively() }
+                    null
+                }
             }
-        } catch (e: ExportException) {
-            throw e
-        } catch (e: SecurityException) {
-            throw ExportException(CANT_OPEN, e)
-        } catch (e: IOException) {
-            throw ExportException(if (isNoSpace(e)) NO_SPACE else NOT_AN_APK, e)
+            direct ?: readByCopy(uri, dir, iconPx)
         }
-        if (bundle.apks.isEmpty()) throw ExportException(NOT_AN_APK)
-        val pkg = parse(bundle.apks, iconPx)
-        if (bundle.obbs.isEmpty()) pkg else pkg.copy(obbs = bundle.obbs, source = bundle.source).let { it.copy(totalBytes = it.totalBytes + it.obbBytes) }
     }
 
     /** Reads several APKs shared together (a base APK and its splits) as one app. */
     suspend fun readMany(uris: List<Uri>, iconPx: Int): PackageToInstall = withContext(Dispatchers.IO) {
         clear()
-        val dir = File(workRoot, System.nanoTime().toString()).apply { mkdirs() }
-        ensureSpace(uris.sumOf { querySize(it) })
-        val used = HashSet<String>()
-        val apks = try {
-            uris.mapIndexed { i, uri ->
-                var name = (displayName(uri) ?: "part$i").substringAfterLast('/')
-                    .let { if (it.endsWith(".apk", ignoreCase = true)) it else "$it.apk" }
-                while (!used.add(name)) name = "x_$name"
-                copy(uri, File(dir, name)).also { if (!isApk(it)) throw ExportException(NOT_ONE_APP) }
+        val dir = newDir()
+        guarded(CANT_OPEN) {
+            val zips = uris.map { openZip(it) }
+            try {
+                if (zips.all { it != null }) {
+                    val apks = zips.mapIndexed { i, zip ->
+                        if (zip!!.getEntry(MANIFEST) == null) throw ExportException(NOT_ONE_APP)
+                        val name = apkName(displayName(uris[i]) ?: "part$i")
+                        Candidate(ApkPart(name, zip.length, PartSource.Document(uris[i]))) { slim ->
+                            SlimApk.write(zip, slim)
+                            Preview(slim, ApkSignatures.fromZip(zip))
+                        }
+                    }
+                    describe(apks, dir, iconPx)
+                } else {
+                    readManyByCopy(uris, dir, iconPx)
+                }
+            } finally {
+                zips.forEach { runCatching { it?.close() } }
             }
-        } catch (e: ExportException) {
-            throw e
-        } catch (e: SecurityException) {
-            throw ExportException(CANT_OPEN, e)
-        } catch (e: IOException) {
-            throw ExportException(CANT_OPEN, e)
         }
-        parse(apks, iconPx)
     }
 
-    private fun isApk(file: File): Boolean =
-        runCatching { ZipFile(file).use { it.getEntry("AndroidManifest.xml") != null } }.getOrDefault(false)
+    /** Maps I/O failures while reading to messages people understand. */
+    private inline fun <T> guarded(ioMessage: String, block: () -> T): T = try {
+        block()
+    } catch (e: ExportException) {
+        throw e
+    } catch (e: SecurityException) {
+        throw ExportException(CANT_OPEN, e)
+    } catch (e: IOException) {
+        throw ExportException(if (isNoSpace(e)) NO_SPACE else ioMessage, e)
+    }
 
-    private fun parse(apks: List<File>, iconPx: Int): PackageToInstall {
-        // Pick the base by name first so only one APK has to be parsed.
-        val ordered = apks.sortedBy { f ->
+    private fun newDir() = File(workRoot, System.nanoTime().toString()).apply { mkdirs() }
+
+    /** A plain APK, or a bundle (.apks / .xapk / .apkm), read in place. */
+    private fun readZip(uri: Uri, zip: ChannelZip, dir: File, iconPx: Int): PackageToInstall {
+        if (zip.getEntry(MANIFEST) != null) {
+            val part = ApkPart(apkName(displayName(uri) ?: "base.apk"), zip.length, PartSource.Document(uri))
+            return describe(
+                listOf(Candidate(part) { slim -> SlimApk.write(zip, slim); Preview(slim, ApkSignatures.fromZip(zip)) }),
+                dir, iconPx,
+            )
+        }
+        val splits = ArrayList<ChannelZip.Entry>()
+        val standalones = ArrayList<ChannelZip.Entry>()
+        val obbs = LinkedHashMap<String, ObbFile>()
+        for (entry in zip.entries) {
+            if (entry.isDirectory) continue
+            val name = entry.name
             when {
-                f.name.equals("base.apk", ignoreCase = true) -> 0
-                !isSplitName(f.name) -> 1
-                else -> 2
+                name.endsWith(".obb", ignoreCase = true) ->
+                    obbName(name)?.let { obbs.putIfAbsent(it, ObbFile(name, it, entry.size)) }
+                name.endsWith(".apk", ignoreCase = true) -> {
+                    // Splits for CPUs this phone doesn't have are never needed: don't even read them.
+                    val abi = abiOf(name.substringAfterLast('/'))
+                    if (abi != null && abi !in deviceAbis) continue
+                    // bundletool archives also carry fallback "standalones"; prefer the splits.
+                    if (name.startsWith("standalones/")) standalones += entry else splits += entry
+                }
             }
         }
-        val (baseFile, base) = ordered.firstNotNullOfOrNull { f -> archiveInfo(f, 0)?.takeIf { it.splitNames.isNullOrEmpty() }?.let { f to it } }
-            ?: ordered.firstNotNullOfOrNull { f -> archiveInfo(f, 0)?.let { f to it } }
-            ?: throw ExportException(NOT_AN_APK)
-        val files = listOf(baseFile) + filterAbiSplits(apks - baseFile)
+        val candidates = splits.ifEmpty { standalones }.map { entry ->
+            val part = ApkPart(entry.name.substringAfterLast('/').ifBlank { "split.apk" }, entry.size, PartSource.Entry(uri, entry.name))
+            Candidate(part) { slim -> previewEntry(zip, entry, slim, dir) }
+        }
+        if (candidates.isEmpty()) throw ExportException(NOT_AN_APK)
+        val pkg = describe(candidates, dir, iconPx)
+        return if (obbs.isEmpty()) pkg else pkg.copy(obbs = obbs.values.toList(), source = uri).let { it.copy(totalBytes = it.totalBytes + it.obbBytes) }
+    }
 
+    /**
+     * The stand-in for an APK inside a bundle: read in place when it is stored uncompressed, or
+     * inflated once when it is compressed. Null if the entry isn't an APK.
+     */
+    private fun previewEntry(zip: ChannelZip, entry: ChannelZip.Entry, slim: File, dir: File): Preview? {
+        if (entry.isStored) {
+            return try {
+                zip.openNested(entry).use { apk ->
+                    SlimApk.write(apk, slim)
+                    Preview(slim, ApkSignatures.fromZip(apk))
+                }
+            } catch (_: ZipException) {
+                null
+            }
+        }
+        return try {
+            Preview(slim, zip.getInputStream(entry).use { SlimApk.stream(it, slim) })
+        } catch (_: ZipException) {
+            // Some APKs can't be read as a stream (stored entries with data descriptors): extract
+            // this one and read it as a file.
+            slim.delete()
+            val file = File(dir, "x_${entry.name.substringAfterLast('/').ifBlank { "base.apk" }}")
+            ensureSpace(entry.size)
+            zip.getInputStream(entry).use { input -> file.outputStream().use { input.copyTo(it, BUFFER) } }
+            Preview(file, certsOf(file), local = file)
+        }
+    }
+
+    /** An APK that might be the base: its part, and how to make its stand-in when needed. */
+    private class Candidate(val part: ApkPart, val preview: (File) -> Preview?)
+
+    /** [file] is what PackageManager reads; [local] is set when the part became a cached copy. */
+    private class Preview(val file: File, val certs: Set<String>, val local: File? = null)
+
+    /**
+     * Picks the base APK (by name first, so usually only one stand-in is made), reads it, and
+     * keeps the splits this phone's CPU needs.
+     */
+    private fun describe(candidates: List<Candidate>, dir: File, iconPx: Int): PackageToInstall {
+        val ordered = candidates.sortedBy { basePriority(it.part.name) }
+        var fallback: Triple<Candidate, Preview, PackageInfo>? = null
+        var chosen: Triple<Candidate, Preview, PackageInfo>? = null
+        for ((i, candidate) in ordered.withIndex()) {
+            val preview = candidate.preview(File(dir, "preview$i.apk")) ?: continue
+            val info = archiveInfo(preview.file, 0) ?: continue
+            val found = Triple(candidate, preview, info)
+            if (info.splitNames.isNullOrEmpty()) {
+                chosen = found
+                break
+            }
+            if (fallback == null) fallback = found
+        }
+        val (baseCandidate, preview, info) = chosen ?: fallback ?: throw ExportException(NOT_AN_APK)
+        val basePart = preview.local?.let { baseCandidate.part.copy(from = PartSource.Local(it)) } ?: baseCandidate.part
+        val others = candidates.filter { it !== baseCandidate }.map { it.part }
+        val parts = listOf(basePart) + filterAbiSplits(others) { it.name }
+        return describe(info, preview.file, parts, preview.certs, iconPx)
+    }
+
+    private fun basePriority(name: String) = when {
+        name.equals("base.apk", ignoreCase = true) -> 0
+        !isSplitName(name) -> 1
+        else -> 2
+    }
+
+    private fun describe(base: PackageInfo, file: File, parts: List<ApkPart>, certs: Set<String>, iconPx: Int): PackageToInstall {
         val app = base.applicationInfo ?: throw ExportException(NOT_AN_APK)
-        app.sourceDir = baseFile.path
-        app.publicSourceDir = baseFile.path
+        app.sourceDir = file.path
+        app.publicSourceDir = file.path
         val label = runCatching { app.loadLabel(pm).toString() }.getOrNull()?.ifBlank { null } ?: base.packageName
         val icon = runCatching {
             app.loadIcon(pm).toBitmap(iconPx, iconPx, Bitmap.Config.ARGB_8888).asImageBitmap()
@@ -202,17 +314,64 @@ class ApkInstaller(private val context: Context) {
                 versionCode = base.versionCodeCompat,
                 minSdk = app.minSdkVersion,
                 icon = icon,
-                files = files,
-                totalBytes = files.sumOf { it.length() },
+                parts = parts,
+                totalBytes = parts.sumOf { it.size.coerceAtLeast(0) },
                 installedVersionName = null,
                 installedVersionCode = null,
                 signatureMatches = true,
                 installedElsewhere = false,
-                certs = emptySet(),
-                baseFile = baseFile,
+                certs = certs,
             ),
         )
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // Sources that can't be read in place (pipes, odd zips): copied to the cache first
+    // ---------------------------------------------------------------------------------------------
+
+    private fun readByCopy(uri: Uri, dir: File, iconPx: Int): PackageToInstall {
+        val name = displayName(uri).orEmpty().lowercase()
+        val bundle = if (name.endsWith(".apk")) {
+            querySize(uri).let { if (it > 0) ensureSpace(it) }
+            Unpacked(listOf(copy(uri, File(dir, "base.apk"))))
+        } else {
+            // null = the zip is itself an APK (no recognisable extension).
+            streamBundle(uri, dir) ?: Unpacked(listOf(copy(uri, File(dir, "base.apk"))))
+        }
+        if (bundle.apks.isEmpty()) throw ExportException(NOT_AN_APK)
+        val pkg = describeLocal(bundle.apks, iconPx)
+        return if (bundle.obbs.isEmpty()) pkg else pkg.copy(obbs = bundle.obbs, source = bundle.source).let { it.copy(totalBytes = it.totalBytes + it.obbBytes) }
+    }
+
+    private fun readManyByCopy(uris: List<Uri>, dir: File, iconPx: Int): PackageToInstall {
+        ensureSpace(uris.sumOf { querySize(it) })
+        val used = HashSet<String>()
+        val apks = uris.mapIndexed { i, uri ->
+            var name = apkName(displayName(uri) ?: "part$i")
+            while (!used.add(name)) name = "x_$name"
+            copy(uri, File(dir, name)).also { if (!isApk(it)) throw ExportException(NOT_ONE_APP) }
+        }
+        return describeLocal(apks, iconPx)
+    }
+
+    private fun describeLocal(apks: List<File>, iconPx: Int): PackageToInstall =
+        describe(
+            apks.map { file ->
+                Candidate(ApkPart(file.name, file.length(), PartSource.Local(file))) { Preview(file, certsOf(file)) }
+            },
+            File(workRoot, "unused"), iconPx,
+        )
+
+    /** Signers of a local APK: from its signature block, or (failing that) from PackageManager. */
+    private fun certsOf(file: File): Set<String> =
+        runCatching { file.inputStream().let { ChannelZip(it.channel, it) }.use(ApkSignatures::fromZip) }.getOrNull()?.ifEmpty { null }
+            ?: archiveInfo(file, certFlags)?.let(::certificates).orEmpty()
+
+    private fun isApk(file: File): Boolean =
+        runCatching { ZipFile(file).use { it.getEntry(MANIFEST) != null } }.getOrDefault(false)
+
+    private fun apkName(displayName: String): String =
+        displayName.substringAfterLast('/').let { if (it.endsWith(".apk", ignoreCase = true)) it else "$it.apk" }
 
     /** Re-checks whether (and which version of) the app is on the phone, e.g. after an uninstall. */
     fun withInstalledState(pkg: PackageToInstall): PackageToInstall {
@@ -222,14 +381,12 @@ class ApkInstaller(private val context: Context) {
                 signatureMatches = true, installedElsewhere = false,
             )
         val here = installed.applicationInfo?.let { it.flags and ApplicationInfo.FLAG_INSTALLED != 0 } ?: true
-        // Only now is the (expensive) archive signature needed.
-        val certs = pkg.certs.ifEmpty { archiveInfo(pkg.baseFile, certFlags)?.let(::certificates).orEmpty() }
+        val certs = pkg.certs
         val installedCerts = certificates(installed)
         return pkg.copy(
             installedVersionName = installed.versionName,
             installedVersionCode = installed.versionCodeCompat,
             installedElsewhere = !here,
-            certs = certs,
             // Unknown certificates (rare) are treated as a match and left to the installer to judge.
             signatureMatches = certs.isEmpty() || installedCerts.isEmpty() || certs.any { it in installedCerts },
         )
@@ -265,7 +422,7 @@ class ApkInstaller(private val context: Context) {
         val installer = pm.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(pkg.packageName)
-            setSize(pkg.files.sumOf { it.length() })
+            setSize(pkg.parts.sumOf { it.size.coerceAtLeast(0) })
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) setInstallReason(PackageManager.INSTALL_REASON_USER)
         }
         val sessionId = try {
@@ -274,12 +431,14 @@ class ApkInstaller(private val context: Context) {
             throw ExportException(CANT_INSTALL, e)
         }
         var committed = false
+        // Bundles: each is opened once for all its APKs.
+        val zips = HashMap<Uri, ChannelZip>()
         try {
             installer.openSession(sessionId).use { session ->
                 val buffer = ByteArray(BUFFER)
-                pkg.files.forEachIndexed { i, file ->
-                    session.openWrite("${i}_${file.name}", 0, file.length()).use { out ->
-                        file.inputStream().use { input ->
+                pkg.parts.forEachIndexed { i, part ->
+                    session.openWrite("${i}_${part.name}", 0, part.size).use { out ->
+                        openPart(part, zips).use { input ->
                             while (true) {
                                 currentCoroutineContext().ensureActive()
                                 val n = input.read(buffer)
@@ -301,14 +460,34 @@ class ApkInstaller(private val context: Context) {
                 session.commit(pending.intentSender)
                 committed = true
             }
+        } catch (e: ExportException) {
+            throw e
         } catch (e: IOException) {
             throw ExportException(if (isNoSpace(e)) NO_SPACE else CANT_INSTALL, e)
         } catch (e: SecurityException) {
             throw ExportException(CANT_INSTALL, e)
         } finally {
+            zips.values.forEach { runCatching { it.close() } }
             if (!committed) runCatching { installer.abandonSession(sessionId) }
         }
         sessionId
+    }
+
+    /** The bytes of one APK, straight from where it is. */
+    private fun openPart(part: ApkPart, zips: MutableMap<Uri, ChannelZip>): InputStream = try {
+        when (val from = part.from) {
+            is PartSource.Local -> from.file.inputStream()
+            is PartSource.Document -> resolver.openInputStream(from.uri) ?: throw ExportException(FILE_GONE)
+            is PartSource.Entry -> {
+                val zip = zips[from.uri] ?: (openZip(from.uri) ?: throw ExportException(FILE_GONE)).also { zips[from.uri] = it }
+                val entry = zip.getEntry(from.entry) ?: throw ExportException(FILE_GONE)
+                zip.getInputStream(entry)
+            }
+        }
+    } catch (e: FileNotFoundException) {
+        throw ExportException(FILE_GONE, e)
+    } catch (e: SecurityException) {
+        throw ExportException(FILE_GONE, e)
     }
 
     fun clear() {
@@ -324,22 +503,6 @@ class ApkInstaller(private val context: Context) {
     private class Unpacked(val apks: List<File>, val obbs: List<ObbFile> = emptyList(), val source: Uri? = null)
 
     private val deviceAbis by lazy { Build.SUPPORTED_ABIS.map { it.replace('-', '_') }.toSet() }
-
-    /**
-     * Extracts the APKs from an .apks / .xapk / .apkm zip. Returns null if the zip turns out to be a
-     * plain APK. Random access when the source is a real file (only the needed entries are read at
-     * all); a single streaming pass otherwise.
-     */
-    private fun unpackBundle(uri: Uri, dir: File): Unpacked? {
-        openZip(uri)?.use { zip ->
-            try {
-                return unpackZip(zip, dir, uri) ?: return null
-            } catch (_: ZipException) {
-                dir.listFiles()?.forEach { it.delete() }
-            }
-        }
-        return streamBundle(uri, dir)
-    }
 
     /**
      * Opens [uri] as a random-access zip on its file descriptor, or null when the source can't seek
@@ -358,7 +521,7 @@ class ApkInstaller(private val context: Context) {
 
     /** Picks the APKs this device needs from [zip] and extracts them; lists game data without reading it. */
     private fun unpackZip(zip: ChannelZip, dir: File, source: Uri): Unpacked? {
-        if (zip.getEntry("AndroidManifest.xml") != null) return null
+        if (zip.getEntry(MANIFEST) != null) return null
         val splits = ArrayList<ChannelZip.Entry>()
         val standalones = ArrayList<ChannelZip.Entry>()
         val obbs = LinkedHashMap<String, ObbFile>()
@@ -557,12 +720,12 @@ class ApkInstaller(private val context: Context) {
     }.getOrNull() ?: uri.lastPathSegment
 
     /** Keeps only the best CPU-architecture split for this device; other splits are left alone. */
-    private fun filterAbiSplits(splits: List<File>): List<File> {
-        val abis = splits.mapNotNull { abiOf(it.name) }.toSet()
+    private fun <T> filterAbiSplits(splits: List<T>, name: (T) -> String): List<T> {
+        val abis = splits.mapNotNull { abiOf(name(it)) }.toSet()
         if (abis.isEmpty()) return splits
         val best = Build.SUPPORTED_ABIS.map { it.replace('-', '_') }.firstOrNull { it in abis }
             ?: throw ExportException("This app isn't made for this phone's processor")
-        return splits.filter { abiOf(it.name).let { abi -> abi == null || abi == best } }
+        return splits.filter { abiOf(name(it)).let { abi -> abi == null || abi == best } }
     }
 
     private fun abiOf(fileName: String): String? {
@@ -643,6 +806,7 @@ class ApkInstaller(private val context: Context) {
     companion object {
         const val ACTION_INSTALL_RESULT = "com.shayor.apkextractor.INSTALL_RESULT"
         private const val BUFFER = 256 * 1024
+        private const val MANIFEST = "AndroidManifest.xml"
         private const val SPACE_MARGIN = 50L * 1024 * 1024
         private const val PART = ".part"
         private val KNOWN_ABIS = listOf("arm64_v8a", "armeabi_v7a", "armeabi", "x86_64", "x86", "riscv64", "mips64", "mips")
@@ -650,6 +814,7 @@ class ApkInstaller(private val context: Context) {
         const val NOT_AN_APK = "That file isn't an APK or APK bundle"
         const val CANT_OPEN = "Couldn't open that file"
         const val CANT_INSTALL = "Couldn't start the installation"
+        const val FILE_GONE = "The file was moved or deleted"
         const val NOT_ONE_APP = "Share one app file, or the APK parts of a single app"
         const val NO_SPACE = "Not enough storage space"
         const val OBB_DENIED = "Couldn't save the game data"

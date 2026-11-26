@@ -12,95 +12,96 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 
-// Neutrals follow Apple's iOS system colours (grouped backgrounds, labels, fills, separators), so
-// the app reads as an iOS app. The accent stays the app's own: "Ink", a muted periwinkle taken from
-// the app icon, or whatever the user picks.
+// The app's look: cool blue-black (dark) or soft grey (light) canvases, flat cards edged by a
+// hairline, quiet blue-grey text and a vivid blue accent (or whatever the user picks).
 
-val Ink = Color(0xFF5862B0)
-val InkLight = Color(0xFFB3B8EE)
+val Ink = Color(0xFF0A84FF)
+val InkLight = Color(0xFF6DB6FF)
+
+/** The app's earlier periwinkle, kept as a preset. */
+val Periwinkle = Color(0xFF5862B0)
 
 val LightColors = lightColorScheme(
     primary = Ink,
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFEAEBF5),
-    onPrimaryContainer = Color(0xFF262B5E),
-    secondary = Color(0xFF8E8E93),
+    primaryContainer = Color(0xFFE3F0FF),
+    onPrimaryContainer = Color(0xFF00336B),
+    secondary = Color(0xFF5F6472),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFE5E5EA),
-    onSecondaryContainer = Color(0xFF000000),
+    secondaryContainer = Color(0xFFECEEF3),
+    onSecondaryContainer = Color(0xFF1B1E26),
     tertiary = Ink,
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFEAEBF5),
-    onTertiaryContainer = Color(0xFF262B5E),
-    error = Color(0xFFFF3B30),
+    tertiaryContainer = Color(0xFFE3F0FF),
+    onTertiaryContainer = Color(0xFF00336B),
+    error = Color(0xFFF0443A),
     onError = Color(0xFFFFFFFF),
-    errorContainer = Color(0xFFFFE5E3),
+    errorContainer = Color(0xFFFFE6E4),
     onErrorContainer = Color(0xFF8A1A13),
-    background = Color(0xFFF2F2F7), // systemGroupedBackground
-    onBackground = Color(0xFF000000),
-    surface = Color(0xFFF2F2F7),
-    onSurface = Color(0xFF000000), // label
-    surfaceVariant = Color(0xFFE5E5EA),
-    onSurfaceVariant = Color(0xFF8A8A8E), // secondaryLabel
-    outline = Color(0xFFC7C7CC), // systemGray3
-    outlineVariant = Color(0xFFD8D8DC), // separator
-    inverseSurface = Color(0xFF1C1C1E),
-    inverseOnSurface = Color(0xFFFFFFFF),
+    background = Color(0xFFF5F6F9),
+    onBackground = Color(0xFF1B1E26),
+    surface = Color(0xFFF5F6F9),
+    onSurface = Color(0xFF1B1E26),
+    surfaceVariant = Color(0xFFECEEF3),
+    onSurfaceVariant = Color(0xFF5F6472),
+    outline = Color(0xFFC9CCD6),
+    outlineVariant = Color(0xFFE2E4EA),
+    inverseSurface = Color(0xFF1B1E26),
+    inverseOnSurface = Color(0xFFEDEFF4),
     inversePrimary = InkLight,
     surfaceTint = Color.Transparent,
     surfaceBright = Color(0xFFFFFFFF),
-    surfaceDim = Color(0xFFE5E5EA),
-    surfaceContainerLowest = Color(0xFFFFFFFF), // secondarySystemGroupedBackground (cells)
-    surfaceContainerLow = Color(0xFFF2F2F7), // sheets
-    surfaceContainer = Color(0xFFEFEFF4),
-    surfaceContainerHigh = Color(0xFFE9E9EE), // ~tertiarySystemFill on white
-    surfaceContainerHighest = Color(0xFFD1D1D6), // systemGray4
+    surfaceDim = Color(0xFFE6E8EE),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF5F6F9),
+    surfaceContainer = Color(0xFFEFF1F5),
+    surfaceContainerHigh = Color(0xFFECEEF3),
+    surfaceContainerHighest = Color(0xFFDDE0E7),
     scrim = Color(0xFF000000),
 )
 
 val DarkColors = darkColorScheme(
-    // iOS keeps accents saturated in dark mode, with white text on filled buttons.
-    primary = Color(0xFF7C86E6),
+    primary = Color(0xFF3D9BFF),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFF2A2E4C),
-    onPrimaryContainer = Color(0xFFE1E3FA),
-    secondary = Color(0xFF8E8E93),
-    onSecondary = Color(0xFF000000),
-    secondaryContainer = Color(0xFF2C2C2E),
-    onSecondaryContainer = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFF132A47),
+    onPrimaryContainer = Color(0xFFD6E8FF),
+    secondary = Color(0xFF9EA4B2),
+    onSecondary = Color(0xFF0B0D12),
+    secondaryContainer = Color(0xFF1E222B),
+    onSecondaryContainer = Color(0xFFEDEFF4),
     tertiary = InkLight,
-    onTertiary = Color(0xFF20255A),
-    tertiaryContainer = Color(0xFF2A2E4C),
-    onTertiaryContainer = Color(0xFFE1E3FA),
-    error = Color(0xFFFF453A),
+    onTertiary = Color(0xFF0B2240),
+    tertiaryContainer = Color(0xFF132A47),
+    onTertiaryContainer = Color(0xFFD6E8FF),
+    error = Color(0xFFFF5B50),
     onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFF3B1513),
     onErrorContainer = Color(0xFFFFB4AE),
-    background = Color(0xFF000000), // systemGroupedBackground
-    onBackground = Color(0xFFFFFFFF),
-    surface = Color(0xFF000000),
-    onSurface = Color(0xFFFFFFFF),
-    surfaceVariant = Color(0xFF2C2C2E),
-    onSurfaceVariant = Color(0xFF98989F), // secondaryLabel
-    outline = Color(0xFF48484A), // systemGray3
-    outlineVariant = Color(0xFF38383A), // separator
-    inverseSurface = Color(0xFFF2F2F7),
-    inverseOnSurface = Color(0xFF000000),
+    background = Color(0xFF0B0D12),
+    onBackground = Color(0xFFEDEFF4),
+    surface = Color(0xFF0B0D12),
+    onSurface = Color(0xFFEDEFF4),
+    surfaceVariant = Color(0xFF1E222B),
+    onSurfaceVariant = Color(0xFF9EA4B2),
+    outline = Color(0xFF353A47),
+    outlineVariant = Color(0xFF262A33),
+    inverseSurface = Color(0xFFEDEFF4),
+    inverseOnSurface = Color(0xFF1B1E26),
     inversePrimary = Ink,
     surfaceTint = Color.Transparent,
-    surfaceBright = Color(0xFF636366),
-    surfaceDim = Color(0xFF000000),
-    surfaceContainerLowest = Color(0xFF1C1C1E), // secondarySystemGroupedBackground (cells)
-    surfaceContainerLow = Color(0xFF1C1C1E), // sheets
-    surfaceContainer = Color(0xFF242426),
-    surfaceContainerHigh = Color(0xFF2C2C2E), // tertiarySystemGroupedBackground
-    surfaceContainerHighest = Color(0xFF3A3A3C),
+    surfaceBright = Color(0xFF353A47),
+    surfaceDim = Color(0xFF0B0D12),
+    surfaceContainerLowest = Color(0xFF15181F),
+    surfaceContainerLow = Color(0xFF15181F),
+    surfaceContainer = Color(0xFF1A1E26),
+    surfaceContainerHigh = Color(0xFF1E222B),
+    surfaceContainerHighest = Color(0xFF2A2F3A),
     scrim = Color(0xFF000000),
 )
 
 /** Window background colors used before Compose draws its first frame. */
-val LightWindowBackground = Color(0xFFF2F2F7)
-val DarkWindowBackground = Color(0xFF000000)
+val LightWindowBackground = Color(0xFFF5F6F9)
+val DarkWindowBackground = Color(0xFF0B0D12)
 
 /**
  * iOS colours that Material's [ColorScheme] has no slot for. Read with [iosColors].
@@ -141,66 +142,69 @@ data class IosPalette(
 
 val LightIos = IosPalette(
     dark = false,
-    groupedBackground = Color(0xFFF2F2F7),
+    groupedBackground = Color(0xFFF5F6F9),
     cell = Color.White,
     elevatedCell = Color.White,
-    sheet = Color(0xFFF2F2F7),
-    label = Color.Black,
-    secondaryLabel = Color(0x993C3C43),
-    tertiaryLabel = Color(0x4D3C3C43),
-    separator = Color(0x4A3C3C43),
-    fill = Color(0x33787880),
-    secondaryFill = Color(0x29787880),
-    tertiaryFill = Color(0x1F767680),
-    green = Color(0xFF34C759),
-    red = Color(0xFFFF3B30),
-    orange = Color(0xFFFF9500),
-    yellow = Color(0xFFFFCC00),
-    blue = Color(0xFF007AFF),
+    sheet = Color(0xFFF5F6F9),
+    label = Color(0xFF1B1E26),
+    secondaryLabel = Color(0xFF5F6472),
+    tertiaryLabel = Color(0xFF9DA2AE),
+    separator = Color(0x1F1C2433),
+    fill = Color(0x2E1C2433),
+    secondaryFill = Color(0x1F1C2433),
+    tertiaryFill = Color(0x121C2433),
+    green = Color(0xFF26B860),
+    red = Color(0xFFF0443A),
+    orange = Color(0xFFF29E1F),
+    yellow = Color(0xFFF5C518),
+    blue = Color(0xFF0A84FF),
     indigo = Color(0xFF5856D6),
-    purple = Color(0xFFAF52DE),
-    pink = Color(0xFFFF2D55),
-    teal = Color(0xFF30B0C7),
-    gray = Color(0xFF8E8E93),
-    glassTint = Color(0xB8FAFAFC),
-    glassRimTop = Color(0xCCFFFFFF),
-    glassRimBottom = Color(0x33FFFFFF),
+    purple = Color(0xFFA25BDB),
+    pink = Color(0xFFF0457A),
+    teal = Color(0xFF13B5CB),
+    gray = Color(0xFF9DA2AE),
+    // Light glass: a thin white veil, a bright highlight along the top edge, and only a faint
+    // edge below (a grey outline all round looks like plastic on a white canvas).
+    glassTint = Color(0x59FFFFFF),
+    glassRimTop = Color(0xE6FFFFFF),
+    glassRimBottom = Color(0x0F1C2433),
 )
 
 val DarkIos = IosPalette(
     dark = true,
-    groupedBackground = Color.Black,
-    cell = Color(0xFF1C1C1E),
-    elevatedCell = Color(0xFF2C2C2E),
-    sheet = Color(0xFF1C1C1E),
-    label = Color.White,
-    secondaryLabel = Color(0x99EBEBF5),
-    tertiaryLabel = Color(0x4DEBEBF5),
-    separator = Color(0xA6545458),
-    fill = Color(0x5C787880),
-    secondaryFill = Color(0x52787880),
-    tertiaryFill = Color(0x3D767680),
-    green = Color(0xFF30D158),
-    red = Color(0xFFFF453A),
-    orange = Color(0xFFFF9F0A),
-    yellow = Color(0xFFFFD60A),
-    blue = Color(0xFF0A84FF),
-    indigo = Color(0xFF5E5CE6),
-    purple = Color(0xFFBF5AF2),
-    pink = Color(0xFFFF375F),
-    teal = Color(0xFF40C8E0),
-    gray = Color(0xFF8E8E93),
-    glassTint = Color(0xB01E1E20),
-    glassRimTop = Color(0x40FFFFFF),
-    glassRimBottom = Color(0x0DFFFFFF),
+    groupedBackground = Color(0xFF0B0D12),
+    cell = Color(0xFF15181F),
+    elevatedCell = Color(0xFF1A1E26),
+    sheet = Color(0xFF111419),
+    label = Color(0xFFEDEFF4),
+    secondaryLabel = Color(0xFF9EA4B2),
+    tertiaryLabel = Color(0xFF636A7A),
+    separator = Color(0x1FFFFFFF),
+    fill = Color(0x2EFFFFFF),
+    secondaryFill = Color(0x1FFFFFFF),
+    tertiaryFill = Color(0x14FFFFFF),
+    green = Color(0xFF3DD47A),
+    red = Color(0xFFFF5B50),
+    orange = Color(0xFFFFB13B),
+    yellow = Color(0xFFFFD24A),
+    blue = Color(0xFF3D9BFF),
+    indigo = Color(0xFF6E6CF0),
+    purple = Color(0xFFBF7BF5),
+    pink = Color(0xFFFF5F8F),
+    teal = Color(0xFF34DCEC),
+    gray = Color(0xFF636A7A),
+    glassTint = Color(0x8015181F),
+    glassRimTop = Color(0x2EFFFFFF),
+    glassRimBottom = Color(0x12FFFFFF),
 )
 
-/** "Pure black" darkens the rows and sheets too, for OLED screens. */
+/** "Pure black" darkens the canvas, rows and sheets too, for OLED screens. */
 fun IosPalette.pureBlack() = copy(
-    cell = Color(0xFF111113),
-    elevatedCell = Color(0xFF1C1C1E),
-    sheet = Color(0xFF0B0B0C),
-    glassTint = Color(0xB8080809),
+    groupedBackground = Color.Black,
+    cell = Color(0xFF0F1116),
+    elevatedCell = Color(0xFF171A21),
+    sheet = Color(0xFF0A0B0E),
+    glassTint = Color(0x8C0F1116),
 )
 
 val LocalIosPalette = staticCompositionLocalOf { LightIos }
@@ -219,7 +223,8 @@ val iosColors: IosPalette
 data class AccentPreset(val name: String, val color: Color)
 
 val AccentPresets = listOf(
-    AccentPreset("Ink", Ink),
+    AccentPreset("Blue", Ink),
+    AccentPreset("Periwinkle", Periwinkle),
     AccentPreset("Ocean", Color(0xFF3E7CB1)),
     AccentPreset("Lagoon", Color(0xFF2F8A8A)),
     AccentPreset("Sage", Color(0xFF5E8A66)),

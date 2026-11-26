@@ -1,17 +1,25 @@
 package com.shayor.apkextractor.ui.screens
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.navigationBars
+import com.shayor.apkextractor.ui.components.SectionLabelStyle
+import com.shayor.apkextractor.ui.components.groupEdge
 import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -153,7 +161,6 @@ import com.shayor.apkextractor.ui.components.PrimaryButton
 import com.shayor.apkextractor.ui.components.SegmentLabel
 import com.shayor.apkextractor.ui.components.SegmentedControl
 import com.shayor.apkextractor.ui.components.SkeletonRow
-import com.shayor.apkextractor.ui.components.TonalIconButton
 import com.shayor.apkextractor.ui.components.cellColor
 import com.shayor.apkextractor.ui.components.glass
 import com.shayor.apkextractor.ui.components.glassSource
@@ -174,9 +181,6 @@ import kotlin.math.roundToInt
 /** The filter control pinned under the Apps title: 34dp control + 10dp below it. */
 private val FilterRowHeight = 44.dp
 
-/** The floating search field above the tab bar, and its gap to the tab bar. */
-private val SearchHeight = 50.dp
-private val SearchGap = 10.dp
 
 /** Where row text starts, so dividers line up under it (16 + 44dp icon + 14). */
 private val RowTextInset = 74.dp
@@ -185,6 +189,9 @@ private val RowTextInset = 74.dp
 @Composable
 fun AppsScreen(
     vm: MainViewModel,
+    /** The search text, typed in the dock beside the tab bar. */
+    query: String,
+    onQueryChange: (String) -> Unit,
     contentPadding: PaddingValues,
     onExtract: (Collection<String>) -> Unit,
     onShare: (String) -> Unit,
@@ -201,15 +208,13 @@ fun AppsScreen(
     val focusManager = LocalFocusManager.current
     val collapsed by listState.scrolledUnderBar()
 
-    var query by rememberSaveable { mutableStateOf("") }
-    LaunchedEffect(query) { vm.setQuery(query) }
     val inSelection = selection.isNotEmpty()
 
-    // Back order: keyboard first (keeps the search text), then selection, then the search itself.
+    // Back order: keyboard first (keeps the search text), then selection, then (in the app shell)
+    // the search itself.
     val imeVisible = WindowInsets.isImeVisible
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(imeVisible) { if (!imeVisible) focusManager.clearFocus() }
-    BackHandler(enabled = !imeVisible && !inSelection && query.isNotEmpty()) { query = "" }
     BackHandler(enabled = !imeVisible && inSelection) { vm.clearSelection() }
     BackHandler(enabled = imeVisible) {
         keyboard?.hide()
@@ -236,12 +241,13 @@ fun AppsScreen(
         }
     }
 
-    // The search field floats just above the tab bar, and above the keyboard while typing.
+    // The dock (tab bar or search field) sits at the bottom, above the keyboard while typing.
     val density = LocalDensity.current
     val tabBar = tabBarClearance()
+    val navBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
-    val keyboardLift = (imeBottom - tabBar).coerceAtLeast(0.dp)
-    val searchBottom = tabBar + SearchGap + keyboardLift
+    val keyboardLift = (imeBottom - navBottom).coerceAtLeast(0.dp)
+    val dockTop = tabBar + keyboardLift
     val topPad = topBarHeight(FilterRowHeight)
 
     // Scroll-to-top: appears only after a deliberate upward scroll (a real distance, not jitter),
@@ -309,7 +315,7 @@ fun AppsScreen(
                         start = 16.dp,
                         end = 16.dp,
                         top = topPad + 4.dp,
-                        bottom = searchBottom + SearchHeight + 24.dp,
+                        bottom = dockTop + 24.dp,
                     ),
                     modifier = Modifier
                         .fillMaxSize()
@@ -324,18 +330,30 @@ fun AppsScreen(
                     }
 
                     item(key = "count", contentType = "count") {
-                        Row(
-                            Modifier.padding(start = 20.dp, end = 4.dp, top = 10.dp, bottom = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+                        Column(Modifier.padding(top = 10.dp, bottom = 12.dp)) {
                             Text(
                                 if (state.loading) "LOADING APPS…"
                                 else "${state.apps.size} ${if (state.apps.size == 1) "APP" else "APPS"}  ·  ${rememberFileSize(state.totalBytes)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = iosColors.secondaryLabel,
-                                modifier = Modifier.weight(1f),
+                                style = SectionLabelStyle,
+                                color = iosColors.tertiaryLabel,
+                                modifier = Modifier.padding(start = 6.dp),
                             )
-                            PackageTypeButton(settings.packageType, vm::setPackageType)
+                            Spacer(Modifier.height(10.dp))
+                            // Package types as chips, and the sort button at the end of the row.
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    Modifier
+                                        .weight(1f)
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    PackageType.entries.forEach { type ->
+                                        TypeChip(type, selected = type == settings.packageType) { vm.setPackageType(type) }
+                                    }
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                SortButton(settings.sortBy, settings.sortAscending, vm::setSort)
+                            }
                         }
                     }
 
@@ -361,7 +379,7 @@ fun AppsScreen(
                                 PrimaryButton(
                                     if (settings.filter != AppFilter.ALL) "Search All Apps" else "Clear Search",
                                     onClick = {
-                                        if (settings.filter != AppFilter.ALL) vm.setFilter(AppFilter.ALL) else query = ""
+                                        if (settings.filter != AppFilter.ALL) vm.setFilter(AppFilter.ALL) else onQueryChange("")
                                     },
                                     height = 44.dp,
                                 )
@@ -415,7 +433,7 @@ fun AppsScreen(
                     sortBy = settings.sortBy,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(top = topPad + 8.dp, bottom = searchBottom + SearchHeight + 12.dp),
+                        .padding(top = topPad + 8.dp, bottom = dockTop + 12.dp),
                 )
             }
         }
@@ -448,7 +466,7 @@ fun AppsScreen(
             exit = fadeOut() + scaleOut(targetScale = 0.8f),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = searchBottom + SearchHeight + 12.dp),
+                .padding(bottom = dockTop + 12.dp),
         ) {
             ScrollTopButton {
                 wantsScrollTop = false
@@ -459,74 +477,53 @@ fun AppsScreen(
                 }
             }
         }
-
-        AnimatedVisibility(
-            visible = !inSelection,
-            enter = slideInVertically(spring(dampingRatio = 0.8f, stiffness = 500f)) { it } + fadeIn(),
-            exit = slideOutVertically { it } + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = Chrome.FloatingMargin, end = Chrome.FloatingMargin, bottom = searchBottom),
-        ) {
-            // Search and sort side by side, as a pair of glass controls (iOS 26 bottom toolbar).
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SearchField(query, { query = it }, Modifier.weight(1f))
-                Spacer(Modifier.width(10.dp))
-                SortButton(settings.sortBy, settings.sortAscending, vm::setSort)
-            }
-        }
     }
 }
 
 /**
- * iOS pull-down button for the package type: a small capsule showing the current choice. It turns
- * accent-tinted while a filter is on, so a shortened list always explains itself.
+ * One package type as a chip. The chosen one is filled with the accent tint, so a shortened list
+ * always explains itself.
  */
 @Composable
-private fun PackageTypeButton(type: PackageType, onChange: (PackageType) -> Unit) {
+private fun TypeChip(type: PackageType, selected: Boolean, onClick: () -> Unit) {
     val p = iosColors
     val accent = MaterialTheme.colorScheme.primary
-    val active = type != PackageType.ALL
     val source = remember { MutableInteractionSource() }
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            Modifier
-                .height(30.dp)
-                .pressScale(source, 0.94f)
-                .clip(CircleShape)
-                .background(if (active) accent.copy(alpha = if (p.dark) 0.24f else 0.13f) else p.tertiaryFill)
-                .clickable(source, indication = null, role = Role.Button, onClickLabel = "Choose package type") { open = true }
-                .padding(start = 12.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                type.label,
-                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                color = if (active) accent else p.label,
-            )
-            Spacer(Modifier.width(2.dp))
-            Icon(Icons.Rounded.UnfoldMore, contentDescription = null, tint = if (active) accent else p.secondaryLabel, modifier = Modifier.size(16.dp))
-        }
-        IosMenu(open, onDismiss = { open = false }, title = "Show") {
-            PackageType.entries.forEachIndexed { i, option ->
-                IosMenuItem(
-                    option.label,
-                    onClick = {
-                        open = false
-                        onChange(option)
-                    },
-                    icon = when (option) {
-                        PackageType.ALL -> Icons.Rounded.Apps
-                        PackageType.SPLIT -> Icons.Rounded.Layers
-                        PackageType.SINGLE -> Icons.Rounded.Android
-                    },
-                    subtitle = option.description,
-                    checked = option == type,
-                    divider = i > 0,
-                )
-            }
-        }
+    val fill by animateColorAsState(
+        // Unselected: a faint fill in dark mode; a white pill like the cards in light mode.
+        if (selected) accent.copy(alpha = if (p.dark) 0.18f else 0.12f) else if (p.dark) p.tertiaryFill else p.cell,
+        tween(180),
+        label = "chipFill",
+    )
+    val content by animateColorAsState(if (selected) accent else p.secondaryLabel, tween(180), label = "chipContent")
+    Row(
+        Modifier
+            .height(34.dp)
+            .pressScale(source, 0.94f)
+            .clip(CircleShape)
+            .background(fill)
+            .border(1.dp, if (selected) accent.copy(alpha = 0.35f) else p.separator, CircleShape)
+            .selectable(selected, interactionSource = source, indication = null, role = Role.RadioButton, onClick = onClick)
+            .padding(start = 10.dp, end = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            when (type) {
+                PackageType.ALL -> Icons.Rounded.Apps
+                PackageType.SPLIT -> Icons.Rounded.Layers
+                PackageType.SINGLE -> Icons.Rounded.Android
+            },
+            contentDescription = null,
+            tint = content,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (type == PackageType.ALL) "All" else type.label,
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+            color = if (selected) accent else p.label,
+            maxLines = 1,
+        )
     }
 }
 
@@ -572,6 +569,7 @@ private fun TipCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .clip(GroupShape)
             .background(cellColor())
+            .border(1.dp, iosColors.separator, GroupShape)
             .padding(start = 16.dp, top = 14.dp, bottom = 14.dp, end = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -591,52 +589,7 @@ private fun TipCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Glass search capsule, like the search field iOS 26 places at the bottom of the screen. */
-@Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
-    val p = iosColors
-    val focusManager = LocalFocusManager.current
-    Row(
-        modifier
-            .fillMaxWidth()
-            .height(SearchHeight)
-            .glass(CircleShape)
-            .padding(start = 16.dp, end = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Search, contentDescription = null, tint = p.secondaryLabel, modifier = Modifier.size(21.dp))
-        Spacer(Modifier.width(8.dp))
-        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (query.isEmpty()) {
-                Text("Search", style = MaterialTheme.typography.bodyLarge, color = p.secondaryLabel, maxLines = 1)
-            }
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = p.label),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        AnimatedVisibility(visible = query.isNotEmpty(), enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
-            Icon(
-                Icons.Rounded.Cancel,
-                contentDescription = "Clear search",
-                tint = p.tertiaryLabel,
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .clickable(role = Role.Button) { onQueryChange("") }
-                    .padding(6.dp),
-            )
-        }
-    }
-}
-
-/** A glass circle beside the search field that opens an iOS-style pull-down menu. */
+/** A round button at the end of the type chips that opens the sort menu. */
 @Composable
 private fun SortButton(sortBy: SortBy, ascending: Boolean, onSort: (SortBy) -> Unit) {
     val p = iosColors
@@ -646,30 +599,25 @@ private fun SortButton(sortBy: SortBy, ascending: Boolean, onSort: (SortBy) -> U
     Box {
         Box(
             Modifier
-                .size(SearchHeight)
+                .size(34.dp)
                 .pressScale(source, 0.9f)
-                .glass(CircleShape)
+                .clip(CircleShape)
+                .background(if (p.dark) p.tertiaryFill else p.cell)
+                .border(1.dp, p.separator, CircleShape)
                 .clickable(source, indication = null, role = Role.Button, onClickLabel = "Sort") { open = true }
-                .semantics { contentDescription = "Sort" },
+                .semantics { contentDescription = "Sort, ${sortBy.label}, ${directionLabel(sortBy, ascending)}" },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
+            Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
         }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            shape = RoundedCornerShape(22.dp),
-            containerColor = if (p.dark) Color(0xFF2C2C2E) else Color(0xFFF9F9FB),
-            shadowElevation = 18.dp,
-            border = BorderStroke(0.5.dp, p.separator),
-            modifier = Modifier.width(260.dp),
+        // The shared menu panel, so it matches the type menu and every other menu in the app.
+        IosMenu(
+            open,
+            onDismiss = { open = false },
+            title = "Sort By",
+            footer = "Choose the current sort again to reverse it.",
+            width = 260.dp,
         ) {
-            Text(
-                "Sort By",
-                style = MaterialTheme.typography.bodySmall,
-                color = p.secondaryLabel,
-                modifier = Modifier.padding(start = 18.dp, top = 4.dp, bottom = 6.dp),
-            )
             SortBy.entries.forEachIndexed { i, option ->
                 val active = option == sortBy
                 if (i > 0) Box(Modifier.padding(start = 46.dp).fillMaxWidth().height(0.5.dp).background(p.separator))
@@ -686,7 +634,7 @@ private fun SortButton(sortBy: SortBy, ascending: Boolean, onSort: (SortBy) -> U
                 ) {
                     // iOS menus mark the current choice with a leading checkmark.
                     Box(Modifier.width(30.dp)) {
-                        if (active) Icon(Icons.Rounded.Check, contentDescription = null, tint = p.label, modifier = Modifier.size(18.dp))
+                        if (active) Icon(Icons.Rounded.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
                     }
                     Column(Modifier.weight(1f)) {
                         Text(option.label, style = MaterialTheme.typography.bodyLarge)
@@ -703,15 +651,14 @@ private fun SortButton(sortBy: SortBy, ascending: Boolean, onSort: (SortBy) -> U
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    Icon(option.icon(), contentDescription = null, tint = p.label, modifier = Modifier.size(20.dp))
+                    Icon(
+                        option.icon(),
+                        contentDescription = null,
+                        tint = if (active) accent else p.tertiaryLabel,
+                        modifier = Modifier.size(19.dp),
+                    )
                 }
             }
-            Text(
-                "Choose the current sort again to reverse it.",
-                style = MaterialTheme.typography.bodySmall,
-                color = p.secondaryLabel,
-                modifier = Modifier.padding(start = 18.dp, end = 16.dp, top = 6.dp, bottom = 4.dp),
-            )
         }
     }
 }
@@ -769,7 +716,7 @@ private fun AppRow(
     val separator = p.separator
     val shape = groupItemShape(first, last)
 
-    Box(modifier.clip(shape)) {
+    Box(modifier.clip(shape).groupEdge(first, last, separator)) {
         if (swiping) {
             Row(
                 Modifier
@@ -934,7 +881,7 @@ private fun resist(x: Float, threshold: Float): Float =
     if (x <= threshold) x else threshold + (x - threshold) * 0.25f
 
 /** [text] with the first case-insensitive match of [query] tinted, or plain text when there is none. */
-private fun highlight(text: String, query: String, background: Color): AnnotatedString {
+internal fun highlight(text: String, query: String, background: Color): AnnotatedString {
     val start = if (query.isEmpty()) -1 else text.indexOf(query, ignoreCase = true)
     if (start < 0) return AnnotatedString(text)
     return buildAnnotatedString {

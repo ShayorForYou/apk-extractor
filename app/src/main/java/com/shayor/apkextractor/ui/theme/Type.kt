@@ -4,24 +4,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /*
- * The iOS type ramp (Large Title 34, Title 1–3, Headline 17 semibold, Body 17, Subheadline 15,
- * Footnote 13, Captions 12/11) on the system sans-serif, a neo-grotesque like SF Pro. Large sizes
- * are tracked in slightly, as SF's display cut is.
+ * Plus Jakarta Sans. It sets wider than SF, so sizes sit a step under the
+ * iOS ramp; only display and title sizes are tracked in, everything smaller is left open.
  */
 
 private val Base = TextStyle(
-    fontFamily = FontFamily.Default,
+    fontFamily = JakartaSans,
     lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
 )
 
-private fun ios(size: Int, line: Int, weight: FontWeight, tracking: Double = 0.0) = Base.copy(
+private fun type(size: Double, line: Double, weight: FontWeight, tracking: Double = 0.0) = Base.copy(
     fontSize = size.sp,
     lineHeight = line.sp,
     fontWeight = weight,
@@ -29,21 +27,21 @@ private fun ios(size: Int, line: Int, weight: FontWeight, tracking: Double = 0.0
 )
 
 val Typography = Typography(
-    displayLarge = ios(48, 54, FontWeight.Bold, -1.0),
-    displayMedium = ios(40, 46, FontWeight.Bold, -0.8),
-    displaySmall = ios(36, 42, FontWeight.Bold, -0.7),
-    headlineLarge = ios(34, 41, FontWeight.Bold, -0.6), // Large Title
-    headlineMedium = ios(28, 34, FontWeight.Bold, -0.4), // Title 1
-    headlineSmall = ios(22, 28, FontWeight.Bold, -0.3), // Title 2
-    titleLarge = ios(20, 25, FontWeight.SemiBold, -0.2), // Title 3
-    titleMedium = ios(17, 22, FontWeight.SemiBold, -0.2), // Headline
-    titleSmall = ios(15, 20, FontWeight.SemiBold, -0.1), // Subheadline, emphasized
-    bodyLarge = ios(17, 22, FontWeight.Normal, -0.2), // Body
-    bodyMedium = ios(15, 20, FontWeight.Normal, -0.1), // Subheadline
-    bodySmall = ios(13, 18, FontWeight.Normal), // Footnote
-    labelLarge = ios(15, 20, FontWeight.SemiBold, -0.1), // Buttons
-    labelMedium = ios(12, 16, FontWeight.Medium), // Caption 1
-    labelSmall = ios(11, 13, FontWeight.Medium, 0.1), // Caption 2
+    displayLarge = type(46.0, 52.0, FontWeight.SemiBold, -1.2),
+    displayMedium = type(40.0, 46.0, FontWeight.SemiBold, -1.0),
+    displaySmall = type(34.0, 40.0, FontWeight.SemiBold, -0.8),
+    headlineLarge = type(32.0, 38.0, FontWeight.Bold, -0.8), // large title
+    headlineMedium = type(28.0, 34.0, FontWeight.Bold, -0.6), // page titles
+    headlineSmall = type(21.0, 27.0, FontWeight.SemiBold, -0.3),
+    titleLarge = type(19.0, 24.0, FontWeight.SemiBold, -0.2),
+    titleMedium = type(16.0, 21.0, FontWeight.SemiBold, -0.1),
+    titleSmall = type(14.0, 19.0, FontWeight.SemiBold),
+    bodyLarge = type(15.0, 21.0, FontWeight.Normal), // rows
+    bodyMedium = type(14.0, 19.5, FontWeight.Normal),
+    bodySmall = type(12.5, 17.0, FontWeight.Normal, 0.05), // secondary lines
+    labelLarge = type(14.0, 19.0, FontWeight.SemiBold), // buttons
+    labelMedium = type(12.0, 16.0, FontWeight.Medium, 0.1),
+    labelSmall = type(10.5, 13.0, FontWeight.SemiBold, 0.4),
 )
 
 val Shapes = Shapes(

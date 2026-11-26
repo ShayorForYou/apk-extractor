@@ -46,6 +46,15 @@ fun ApkExtractorTheme(
         }
     }
 
+    // The app palette, following the user's accent and Pure Black.
+    val palette = remember(ios, target) {
+        (if (ios.dark) DarkPalette else LightPalette).copy(
+            background = ios.groupedBackground,
+            surface = ios.cell,
+            accent = target.primary,
+        )
+    }
+
     MaterialTheme(
         colorScheme = target,
         typography = Typography,
@@ -53,6 +62,7 @@ fun ApkExtractorTheme(
     ) {
         CompositionLocalProvider(
             LocalIosPalette provides ios,
+            LocalAppPalette provides palette,
             LocalCellColor provides ios.cell,
             // Pressed rows light up like iOS cells (no ripples). Overscroll stays the platform's own:
             // it is drawn on the GPU and never fights the pager's or the list's own flings.
@@ -71,9 +81,9 @@ private fun ColorScheme.toPureBlack() = copy(
     background = Color.Black,
     surface = Color.Black,
     surfaceDim = Color.Black,
-    surfaceContainerLowest = Color(0xFF111113),
-    surfaceContainerLow = Color(0xFF0B0B0C),
-    surfaceContainer = Color(0xFF161618),
-    surfaceContainerHigh = Color(0xFF1C1C1E),
-    surfaceContainerHighest = Color(0xFF2C2C2E),
+    surfaceContainerLowest = Color(0xFF0F1116),
+    surfaceContainerLow = Color(0xFF0A0B0E),
+    surfaceContainer = Color(0xFF13151B),
+    surfaceContainerHigh = Color(0xFF171A21),
+    surfaceContainerHighest = Color(0xFF22262F),
 )

@@ -1,5 +1,11 @@
 package com.shayor.apkextractor.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import com.shayor.apkextractor.ui.components.ProvideToasts
+import com.shayor.apkextractor.ui.components.ToastCenter
+import com.shayor.apkextractor.ui.components.ToastTone
+import com.shayor.apkextractor.ui.components.toast
+import com.shayor.apkextractor.ui.theme.JakartaSans
 import android.Manifest
 import android.content.ActivityNotFoundException
 import androidx.activity.compose.BackHandler
@@ -29,7 +35,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,7 +70,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -91,6 +100,7 @@ import com.shayor.apkextractor.ui.components.CloseButton
 import com.shayor.apkextractor.ui.components.LocalGlassKey
 import com.shayor.apkextractor.ui.components.LocalGlassState
 import com.shayor.apkextractor.ui.components.PrimaryButton
+import com.shayor.apkextractor.ui.components.SearchDock
 import com.shayor.apkextractor.ui.components.ShareButton
 import com.shayor.apkextractor.ui.components.SplitFormatMenu
 import com.shayor.apkextractor.ui.components.TonalIconButton
@@ -118,7 +128,7 @@ private const val TAB_FADE_IN_MS = 180
 private const val TAB_FADE_OUT_MS = 110
 
 /** A file that takes longer than this to read opens the install sheet with placeholders. */
-private const val SLOW_READ_MS = 300L
+private const val SLOW_READ_MS = 100L
 
 /** How long a removal can be undone (before accessibility adjustments). */
 private const val UNDO_WINDOW_MS = 6_000L
@@ -137,6 +147,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val colors = MaterialTheme.colorScheme
     val snackbar = remember { SnackbarHostState() }
+    ProvideToasts(snackbar)
     val accessibility = LocalAccessibilityManager.current
     val settings by vm.settings.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
@@ -153,6 +164,24 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     // Each tab keeps its scroll position, search text etc. while another tab is showing.
     val tabStates = rememberSaveableStateHolder()
 
+    // Search, on the list tabs (Apps, History): opened from the round button beside the tab bar,
+    // which it then covers. Each tab has its own text.
+    var query by rememberSaveable { mutableStateOf("") }
+    var historyQuery by rememberSaveable { mutableStateOf("") }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(query) { vm.setQuery(query) }
+    val closeSearch: () -> Unit = {
+        searchOpen = false
+        query = ""
+        historyQuery = ""
+    }
+    val history by vm.history.collectAsStateWithLifecycle()
+    val searchAvailable = tab == Tab.APPS || (tab == Tab.HISTORY && history.isNotEmpty())
+    // Switching tabs (e.g. from a launcher shortcut) ends the search, so no hidden filter lingers;
+    // so does deleting the last saved file while searching History.
+    LaunchedEffect(tab) { closeSearch() }
+    LaunchedEffect(searchAvailable) { if (!searchAvailable) closeSearch() }
+
     // --- Installing APKs ---------------------------------------------------------------------
     val installVm: InstallViewModel = viewModel()
     val installState by installVm.state.collectAsStateWithLifecycle()
@@ -165,7 +194,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
             // Bundles (.apks/.xapk/.apkm) have no standard MIME type, so every file is offered and checked.
             filePicker.launch(arrayOf("*/*"))
         } catch (_: ActivityNotFoundException) {
-            scope.launch { snackbar.showSnackbar("No file picker found") }
+            scope.launch { snackbar.toast("No file picker found", ToastTone.Warning) }
         }
     }
     LaunchedEffect(installVm, lifecycleOwner) {
@@ -174,7 +203,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                 try {
                     context.startActivity(intent)
                 } catch (_: Exception) {
-                    launch { snackbar.showSnackbar("No app can open this") }
+                    launch { snackbar.toast("No app can open this", ToastTone.Warning) }
                 }
             }
         }
@@ -219,7 +248,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                 when (event) {
                     is UiEvent.Message -> {
                         snackbar.currentSnackbarData?.dismiss()
-                        launch { snackbar.showSnackbar(event.text) }
+                        launch { snackbar.toast(event.text, event.tone) }
                     }
 
                     is UiEvent.Undoable -> {
@@ -228,7 +257,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                         val timeout = accessibility?.calculateRecommendedTimeoutMillis(
                             UNDO_WINDOW_MS, containsIcons = true, containsText = true, containsControls = true,
                         ) ?: UNDO_WINDOW_MS
-                        val visuals = UndoVisuals(event.text, timeout)
+                        val visuals = UndoVisuals(event.text, timeout, event.tone)
                         launch {
                             var undone = false
                             try {
@@ -252,14 +281,14 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                     is UiEvent.Launch -> try {
                         context.startActivity(event.intent)
                     } catch (_: ActivityNotFoundException) {
-                        launch { snackbar.showSnackbar("No app can open this") }
+                        launch { snackbar.toast("No app can open this", ToastTone.Warning) }
                     }
 
                     is UiEvent.LaunchAny -> {
                         val started = event.intents.any { intent ->
                             runCatching { context.startActivity(intent) }.isSuccess
                         }
-                        if (!started) launch { snackbar.showSnackbar(event.failMessage) }
+                        if (!started) launch { snackbar.toast(event.failMessage, ToastTone.Warning) }
                     }
 
                     is UiEvent.Extracted -> {
@@ -277,7 +306,7 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
         val pending = pendingExtract
         pendingExtract = null
         if (granted && pending != null) vm.extract(pending.first, pending.second)
-        else if (!granted) scope.launch { snackbar.showSnackbar("Storage permission is needed to save apps") }
+        else if (!granted) scope.launch { snackbar.toast("Storage permission is needed to save apps", ToastTone.Warning) }
     }
     val extractWith: (Collection<String>, SplitMode?) -> Unit = { pkgs, mode ->
         if (vm.needsLegacyStoragePermission()) {
@@ -291,6 +320,8 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     }
 
     BackHandler(enabled = tab != Tab.APPS) { goTo(Tab.APPS) }
+    // The Apps screen's own handlers (keyboard, then selection) come first, being composed later.
+    BackHandler(enabled = searchOpen) { closeSearch() }
 
     // Pages run edge to edge under the glass bars; each adds its own top bar height. The bottom
     // keeps the last rows clear of the floating tab bar.
@@ -317,6 +348,8 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                 when (shown) {
                     Tab.APPS -> AppsScreen(
                         vm = vm,
+                        query = query,
+                        onQueryChange = { query = it },
                         contentPadding = pagePadding,
                         onExtract = requestExtract,
                         onShare = { pkg -> vm.share(listOf(pkg)) },
@@ -325,7 +358,9 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                     Tab.INSTALL -> InstallScreen(vm, installVm, pagePadding, onPickFile = pickFile)
                     Tab.HISTORY -> HistoryScreen(
                         vm,
-                        pagePadding,
+                        query = historyQuery,
+                        onQueryChange = { historyQuery = it },
+                        contentPadding = pagePadding,
                         onBrowseApps = { goTo(Tab.APPS) },
                         onInstall = installVm::open,
                     )
@@ -341,12 +376,14 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                 }
             }
 
-            AppSnackbarHost(
+            // While a sheet is open its own layer shows the toasts, above it.
+            if (!ToastCenter.coveredBySheet) AppSnackbarHost(
                 snackbar,
                 Modifier
                     .align(Alignment.BottomCenter)
-                    // Above the tab bar, and above the search field on the Apps tab.
-                    .padding(bottom = tabBarClearance() + if (tab == Tab.APPS && !selecting) 74.dp else 12.dp),
+                    // Above the tab bar (or the search field over it), and above the keyboard.
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                    .padding(bottom = Chrome.TabBarGap + Chrome.TabBarHeight + 12.dp),
             )
 
             // Floating glass tab bar; while apps are selected it morphs into their toolbar.
@@ -360,7 +397,8 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                 label = "bottom",
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
+                    // The open search field rides up with the keyboard.
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
                     .padding(start = Chrome.FloatingMargin, end = Chrome.FloatingMargin, bottom = Chrome.TabBarGap),
             ) { selectingNow ->
                 if (selectingNow) {
@@ -374,7 +412,16 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
                         onExtract = { mode -> extractWith(selection, mode) },
                     )
                 } else {
-                    GlassTabBar(tab, onSelect = goTo)
+                    val onHistory = tab == Tab.HISTORY
+                    SearchDock(
+                        searchAvailable = searchAvailable,
+                        open = searchOpen,
+                        query = if (onHistory) historyQuery else query,
+                        onQueryChange = { if (onHistory) historyQuery = it else query = it },
+                        placeholder = if (onHistory) "Search saved files" else "Search apps",
+                        onOpen = { searchOpen = true },
+                        onCancel = closeSearch,
+                    ) { modifier -> GlassTabBar(tab, onSelect = goTo, modifier = modifier) }
                 }
             }
         }
@@ -419,7 +466,9 @@ fun ApkExtractorApp(vm: MainViewModel = viewModel()) {
     }
 
     // Open the sheet once the file has been read, so it slides up a single time with its final
-    // content. Only a slow read (a big bundle) shows the sheet early, with placeholders.
+    // content. Reading only takes the manifest, resources and signature (not the whole file), so
+    // this is usually well under the wait; a slower read shows the sheet with placeholders, which
+    // keep its exact height, so the content fades in without the sheet moving.
     var showInstallSheet by remember { mutableStateOf(false) }
     LaunchedEffect(installState is InstallState.Idle, installState is InstallState.Reading) {
         showInstallSheet = when (installState) {
@@ -451,7 +500,7 @@ private fun closeness(position: Float, index: Int): Float = (1f - abs(position -
  * the layout / draw phases, so the bar never recomposes while animating.
  */
 @Composable
-private fun GlassTabBar(current: Tab, onSelect: (Tab) -> Unit) {
+private fun GlassTabBar(current: Tab, onSelect: (Tab) -> Unit, modifier: Modifier = Modifier) {
     // The lens glides to the chosen tab on a spring; read only in layout / draw, so it never recomposes.
     val lensPosition = animateFloatAsState(
         current.ordinal.toFloat(),
@@ -460,9 +509,10 @@ private fun GlassTabBar(current: Tab, onSelect: (Tab) -> Unit) {
     )
     val p = iosColors
     val accent = MaterialTheme.colorScheme.primary
-    val lens = if (p.dark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.06f)
+    // The lens is a soft tint of the accent, as on the app's other controls.
+    val lens = accent.copy(alpha = if (p.dark) 0.16f else 0.10f)
     BoxWithConstraints(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(Chrome.TabBarHeight)
             .glass(CircleShape)
@@ -527,7 +577,7 @@ private fun GlassTabBar(current: Tab, onSelect: (Tab) -> Unit) {
     }
 }
 
-private val TabLabel = TextStyle(fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold)
+private val TabLabel = TextStyle(fontFamily = JakartaSans, fontSize = 10.5.sp, lineHeight = 13.sp, fontWeight = FontWeight.SemiBold)
 
 /** Glass toolbar shown instead of the tabs while apps are selected. */
 @Composable

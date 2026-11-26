@@ -16,20 +16,33 @@ import java.util.zip.ZipException
  * works on a file descriptor from a content provider (re-opening one through /proc/self/fd is
  * refused on FUSE storage). Supports Zip64, so bundles over 4 GB work too.
  */
-internal class ChannelZip(private val channel: FileChannel, private val onClose: Closeable = channel) : Closeable {
+internal class ChannelZip(
+    private val channel: FileChannel,
+    private val onClose: Closeable = channel,
+    /** Where this zip starts in [channel]: non-zero for an APK stored (uncompressed) inside a bundle. */
+    private val base: Long = 0,
+    /** This zip's length, from [base]. */
+    val length: Long = channel.size() - base,
+) : Closeable {
 
     class Entry(
         val name: String,
         internal val method: Int,
+        internal val crc: Long,
         internal val compressedSize: Long,
         val size: Long,
         internal val localOffset: Long,
     ) {
         val isDirectory get() = name.endsWith('/')
+        val isStored get() = method == STORED
     }
 
     val entries: List<Entry>
     private val byName: Map<String, Entry>
+
+    /** Offset of the central directory; an APK's signing block sits just before it. */
+    var centralDirectoryOffset = 0L
+        private set
 
     init {
         try {
@@ -43,12 +56,31 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
 
     fun getEntry(name: String): Entry? = byName[name]
 
-    /** The entry's uncompressed bytes. Reads are positional, so several streams can be open at once. */
-    fun getInputStream(entry: Entry): InputStream {
+    /** Where the entry's (possibly compressed) data starts. */
+    private fun dataStart(entry: Entry): Long {
         val header = read(entry.localOffset, LOCAL_HEADER)
         if (header.getInt(0) != LOCAL_SIG) throw ZipException("Bad local header: ${entry.name}")
-        val dataStart = entry.localOffset + LOCAL_HEADER + u16(header, 26) + u16(header, 28)
-        val raw = RangeStream(dataStart, entry.compressedSize)
+        return entry.localOffset + LOCAL_HEADER + u16(header, 26) + u16(header, 28)
+    }
+
+    /** The entry's bytes exactly as stored in the zip (compressed if it is). */
+    fun getRawStream(entry: Entry): InputStream = RangeStream(dataStart(entry), entry.compressedSize)
+
+    /**
+     * A stored (uncompressed) entry that is itself a zip, e.g. an APK inside a bundle, opened in
+     * place with no copy. Closing it leaves this zip open.
+     */
+    fun openNested(entry: Entry): ChannelZip {
+        if (!entry.isStored) throw ZipException("Compressed entry: ${entry.name}")
+        return ChannelZip(channel, {}, base + dataStart(entry), entry.size)
+    }
+
+    /** [length] bytes at [position] of this zip, little-endian. */
+    fun readAt(position: Long, length: Int): ByteBuffer = read(position, length)
+
+    /** The entry's uncompressed bytes. Reads are positional, so several streams can be open at once. */
+    fun getInputStream(entry: Entry): InputStream {
+        val raw = RangeStream(dataStart(entry), entry.compressedSize)
         return when (entry.method) {
             STORED -> raw
             DEFLATED -> object : InflaterInputStream(raw, Inflater(true), BUFFER) {
@@ -83,7 +115,7 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
     // ---------------------------------------------------------------------------------------------
 
     private fun readCentralDirectory(): List<Entry> {
-        val fileSize = channel.size()
+        val fileSize = length
         if (fileSize < EOCD_MIN) throw ZipException("Too small")
         // The end record sits in the last 22 bytes + up to 64 KB of comment.
         val tailSize = minOf(fileSize, EOCD_MIN + 0xFFFFL).toInt()
@@ -111,12 +143,14 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
             cdOffset = record.getLong(48)
         }
         if (cdSize > MAX_DIRECTORY || cdOffset + cdSize > fileSize) throw ZipException("Bad central directory")
+        centralDirectoryOffset = cdOffset
 
         val cd = read(cdOffset, cdSize.toInt())
         val list = ArrayList<Entry>(count.coerceAtMost(4096).toInt())
         var p = 0
         while (p + CENTRAL_HEADER <= cd.limit() && cd.getInt(p) == CENTRAL_SIG) {
             val method = u16(cd, p + 10)
+            val crc = u32(cd, p + 16)
             var compressed = u32(cd, p + 20)
             var size = u32(cd, p + 24)
             val nameLen = u16(cd, p + 28)
@@ -141,7 +175,7 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
                     e += 4 + len
                 }
             }
-            list += Entry(String(nameBytes, Charsets.UTF_8), method, compressed, size, offset)
+            list += Entry(String(nameBytes, Charsets.UTF_8), method, crc, compressed, size, offset)
             p += CENTRAL_HEADER + nameLen + extraLen + commentLen
         }
         if (list.isEmpty()) throw ZipException("Empty zip")
@@ -149,8 +183,9 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
     }
 
     private fun read(position: Long, length: Int): ByteBuffer {
+        if (position < 0 || length < 0 || position + length > this.length) throw EOFException()
         val buffer = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN)
-        var pos = position
+        var pos = base + position
         while (buffer.hasRemaining()) {
             val n = channel.read(buffer, pos)
             if (n < 0) throw EOFException()
@@ -162,8 +197,8 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
 
     /** [length] bytes from [start], read with positional reads straight into the caller's array. */
     private inner class RangeStream(start: Long, length: Long) : InputStream() {
-        private var pos = start
-        private val end = start + length
+        private var pos = base + start
+        private val end = minOf(base + start + length, base + this@ChannelZip.length)
 
         override fun read(): Int {
             val one = ByteArray(1)
@@ -183,7 +218,7 @@ internal class ChannelZip(private val channel: FileChannel, private val onClose:
         override fun available(): Int = (end - pos).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
     }
 
-    private companion object {
+    internal companion object {
         const val LOCAL_SIG = 0x04034b50
         const val CENTRAL_SIG = 0x02014b50
         const val EOCD_SIG = 0x06054b50

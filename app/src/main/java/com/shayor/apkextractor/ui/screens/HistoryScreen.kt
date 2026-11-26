@@ -1,5 +1,17 @@
 package com.shayor.apkextractor.ui.screens
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.SearchOff
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.rounded.Android
+import com.shayor.apkextractor.ui.components.SectionLabelStyle
+import com.shayor.apkextractor.ui.components.groupEdge
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -115,13 +127,28 @@ private sealed interface HistoryItem {
 @Composable
 fun HistoryScreen(
     vm: MainViewModel,
+    /** The search text, typed in the dock beside the tab bar. */
+    query: String,
+    onQueryChange: (String) -> Unit,
     contentPadding: PaddingValues,
     onBrowseApps: () -> Unit,
     onInstall: (HistoryEntry) -> Unit,
 ) {
     val entries by vm.history.collectAsStateWithLifecycle()
+    // A search keeps the files whose app, package, version or file name match.
+    val term = query.trim()
+    val searching = term.isNotEmpty()
+    val shown = remember(entries, term) {
+        if (term.isEmpty()) entries
+        else entries.filter { e ->
+            e.label.contains(term, ignoreCase = true) ||
+                e.packageName.contains(term, ignoreCase = true) ||
+                e.versionName.contains(term, ignoreCase = true) ||
+                e.fileName.contains(term, ignoreCase = true)
+        }
+    }
     // Entries are newest first, and groupBy keeps first-seen order, so groups are too.
-    val groups = remember(entries) { entries.groupBy { it.packageName }.values.toList() }
+    val groups = remember(shown) { shown.groupBy { it.packageName }.values.toList() }
     var expanded by rememberSaveable { mutableStateOf(listOf<String>()) }
     val listState = rememberLazyListState()
     val collapsed by listState.scrolledUnderBar()
@@ -133,13 +160,14 @@ fun HistoryScreen(
         scope.launch { if (vm.ensureReadable(entry)) onInstall(entry) }
     }
 
-    val items = remember(groups, expanded) {
+    val items = remember(groups, expanded, searching) {
         buildList {
             groups.forEach { group ->
                 val latest = group.first()
                 val pkg = latest.packageName
                 val older = group.size - 1
-                val open = pkg in expanded
+                // While searching, every match is in view: each app's card is open.
+                val open = searching || pkg in expanded
                 add(HistoryItem.Latest(latest, first = true, last = older == 0))
                 if (older > 0) {
                     add(HistoryItem.Toggle(pkg, older, open, last = !open))
@@ -149,6 +177,13 @@ fun HistoryScreen(
         }
     }
 
+    // The list ends above the keyboard while the search field is up.
+    val density = LocalDensity.current
+    val keyboardLift = with(density) {
+        (WindowInsets.ime.getBottom(this) - WindowInsets.navigationBars.getBottom(this)).coerceAtLeast(0).toDp()
+    }
+    val titleHighlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -156,7 +191,7 @@ fun HistoryScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = topBarHeight() + 4.dp,
-                bottom = contentPadding.calculateBottomPadding(),
+                bottom = contentPadding.calculateBottomPadding() + keyboardLift,
             ),
             modifier = Modifier
                 .fillMaxSize()
@@ -165,22 +200,32 @@ fun HistoryScreen(
             item(key = "summary") {
                 Text(
                     when {
+                        searching -> if (shown.size == 1) "1 RESULT" else "${shown.size} RESULTS"
                         entries.isEmpty() -> ""
                         entries.size == 1 -> "1 SAVED FILE"
                         groups.size == entries.size -> "${entries.size} SAVED FILES"
                         groups.size == 1 -> "${entries.size} SAVED VERSIONS OF ${groups[0].first().label.uppercase()}"
                         else -> "${entries.size} SAVED FILES FROM ${groups.size} APPS"
                     },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = iosColors.secondaryLabel,
-                    modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 7.dp),
+                    style = SectionLabelStyle,
+                    color = iosColors.tertiaryLabel,
+                    modifier = Modifier.padding(start = 6.dp, top = 14.dp, bottom = 8.dp),
                 )
             }
             val gone = entries.count { it.id in missingIds }
-            if (gone > 0) {
+            if (gone > 0 && !searching) {
                 item(key = "missing") { MissingBanner(gone, onRemove = vm::removeMissing) }
             }
-            if (entries.isNotEmpty()) {
+            if (searching && shown.isEmpty()) {
+                item(key = "noResults") {
+                    EmptyState(
+                        icon = Icons.Rounded.SearchOff,
+                        title = "No Results",
+                        message = "No saved file matches “$term”",
+                    ) { PrimaryButton("Clear Search", onClick = { onQueryChange("") }, height = 44.dp) }
+                }
+            }
+            if (shown.isNotEmpty()) {
                 itemsIndexed(items, key = { _, it -> it.key }) { i, item ->
                     val shape = groupItemShape(item.first, item.last)
                     when (item) {
@@ -189,10 +234,14 @@ fun HistoryScreen(
                             shape = shape,
                             modifier = Modifier
                                 .animateItem()
-                                .padding(top = if (i > 0) 14.dp else 0.dp),
+                                .padding(top = if (i > 0) 14.dp else 0.dp)
+                                .groupEdge(item.first, item.last, iosColors.separator),
                         ) {
                             HistoryRow(
                                 entry = item.entry,
+                                title = remember(item.entry.label, term, titleHighlight) {
+                                    highlight(item.entry.label, term, titleHighlight)
+                                },
                                 missing = item.entry.id in missingIds,
                                 onInstall = { install(item.entry) },
                                 onShare = { vm.shareHistory(item.entry) },
@@ -204,13 +253,13 @@ fun HistoryScreen(
                             open = item.open,
                             shape = shape,
                             onClick = { expanded = if (item.open) expanded - item.pkg else expanded + item.pkg },
-                            modifier = Modifier.animateItem(),
+                            modifier = Modifier.animateItem().groupEdge(item.first, item.last, iosColors.separator),
                         )
 
                         is HistoryItem.Version -> SwipeToRemove(
                             onRemove = { vm.deleteSaved(item.entry) },
                             shape = shape,
-                            modifier = Modifier.animateItem(),
+                            modifier = Modifier.animateItem().groupEdge(item.first, item.last, iosColors.separator),
                         ) {
                             VersionRow(
                                 entry = item.entry,
@@ -243,13 +292,11 @@ fun HistoryScreen(
                     .padding(top = topBarHeight(), bottom = contentPadding.calculateBottomPadding()),
                 contentAlignment = Alignment.Center,
             ) {
-                EmptyState(
-                    icon = Icons.Rounded.History,
-                    title = "No Saved Apps",
-                    message = "Apps you extract will show up here.",
-                ) {
-                    PrimaryButton("Browse Apps", onClick = onBrowseApps, height = 44.dp)
-                }
+                val settings by vm.settings.collectAsStateWithLifecycle()
+                HistoryEmpty(
+                    location = settings.outputFolderName ?: com.shayor.apkextractor.data.ApkExporter.DEFAULT_LOCATION,
+                    onBrowseApps = onBrowseApps,
+                )
             }
         }
 
@@ -265,8 +312,8 @@ fun HistoryScreen(
                         onClick = { vm.openFolder(entries.first().treeUri) },
                         size = 32.dp,
                     )
-                    Spacer(Modifier.width(4.dp))
-                    BarTextButton("Clear All", onClick = { confirmClear = true })
+                    Spacer(Modifier.width(8.dp))
+                    ClearAllButton(onClick = { confirmClear = true })
                 }
             } else {
                 null
@@ -287,20 +334,29 @@ fun HistoryScreen(
     }
 }
 
-/** A plain accent-coloured word in the navigation bar, like iOS bar button items. */
+/**
+ * Clear All, as a soft red pill the height of the folder button beside it: it reads as the
+ * destructive one of the pair without shouting (the sheet it opens asks before anything goes).
+ */
 @Composable
-private fun BarTextButton(text: String, onClick: () -> Unit) {
+private fun ClearAllButton(onClick: () -> Unit) {
+    val p = iosColors
     val source = remember { MutableInteractionSource() }
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier
+    Row(
+        Modifier
+            .height(32.dp)
             .pressScale(source, 0.92f)
             .clip(CircleShape)
+            .background(p.red.copy(alpha = if (p.dark) 0.16f else 0.10f))
+            .border(1.dp, p.red.copy(alpha = if (p.dark) 0.28f else 0.22f), CircleShape)
             .clickable(source, indication = null, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-    )
+            .padding(start = 10.dp, end = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.DeleteSweep, contentDescription = null, tint = p.red, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(5.dp))
+        Text("Clear All", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = p.red)
+    }
 }
 
 private val AutoTag = PackageFormat("AUTO", "Saved by auto-backup", accent = false)
@@ -313,7 +369,14 @@ private fun Modifier.topDivider(color: Color, inset: Dp) = drawBehind {
 
 /** An app's newest saved file, at the top of its card. Same actions as its older versions. */
 @Composable
-private fun HistoryRow(entry: HistoryEntry, missing: Boolean, onInstall: () -> Unit, onShare: () -> Unit) {
+private fun HistoryRow(
+    entry: HistoryEntry,
+    /** The app name, with a search match marked. */
+    title: AnnotatedString,
+    missing: Boolean,
+    onInstall: () -> Unit,
+    onShare: () -> Unit,
+) {
     val p = iosColors
     Row(
         Modifier
@@ -322,11 +385,11 @@ private fun HistoryRow(entry: HistoryEntry, missing: Boolean, onInstall: () -> U
             .padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppIcon(entry.packageName, "${entry.packageName}@history", 44.dp)
+        AppIcon(entry.packageName, "${entry.packageName}@history", 44.dp, backupUri = entry.uri)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                entry.label,
+                title,
                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -420,6 +483,7 @@ private fun MissingBanner(count: Int, onRemove: () -> Unit) {
                 .fillMaxWidth()
                 .clip(groupItemShape(true, true))
                 .background(cellColor())
+                .groupEdge(true, true, iosColors.separator)
                 .padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -517,4 +581,121 @@ private fun SwipeToRemove(
             }
         },
     ) { content() }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+// Empty history
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * Nothing saved yet: a small fan of file cards over a soft accent glow (the side cards open out
+ * once, on a spring, when the screen first shows; nothing loops), a title, what History is for,
+ * the way to start, and where files will be saved.
+ */
+@Composable
+private fun HistoryEmpty(location: String, onBrowseApps: () -> Unit) {
+    val p = iosColors
+    val accent = MaterialTheme.colorScheme.primary
+    val reveal = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) {
+        reveal.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f))
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 36.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        val glow = accent.copy(alpha = if (p.dark) 0.20f else 0.12f)
+        Box(
+            Modifier
+                .size(width = 200.dp, height = 150.dp)
+                .drawBehind {
+                    drawCircle(
+                        androidx.compose.ui.graphics.Brush.radialGradient(listOf(glow, Color.Transparent), center = center, radius = size.width * 0.55f),
+                        radius = size.width * 0.55f,
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            FileCard(Modifier.graphicsLayer {
+                val t = reveal.value
+                rotationZ = -12f * t
+                translationX = -30.dp.toPx() * t
+                translationY = 6.dp.toPx() * t
+                alpha = 0.55f * t.coerceIn(0f, 1f)
+            }, accent, faded = true)
+            FileCard(Modifier.graphicsLayer {
+                val t = reveal.value
+                rotationZ = 10f * t
+                translationX = 30.dp.toPx() * t
+                translationY = 4.dp.toPx() * t
+                alpha = 0.75f * t.coerceIn(0f, 1f)
+            }, accent, faded = true)
+            FileCard(Modifier.graphicsLayer {
+                val t = reveal.value
+                val scale = 0.92f + 0.08f * t
+                scaleX = scale
+                scaleY = scale
+                translationY = -4.dp.toPx() * t
+            }, accent, faded = false)
+        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "Nothing saved yet",
+            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Every app you extract is kept here, ready to share, move or reinstall.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = p.secondaryLabel,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(24.dp))
+        PrimaryButton("Browse Apps", onClick = onBrowseApps, height = 46.dp)
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.FolderOpen, contentDescription = null, tint = p.tertiaryLabel, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "Saving to $location",
+                style = MaterialTheme.typography.labelMedium,
+                color = p.tertiaryLabel,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** One card of the fan: an app-file tile and two lines of "text". */
+@Composable
+private fun FileCard(modifier: Modifier, accent: Color, faded: Boolean) {
+    val p = iosColors
+    val shape = RoundedCornerShape(20.dp)
+    Column(
+        modifier
+            .size(width = 92.dp, height = 112.dp)
+            .clip(shape)
+            .background(if (faded) p.tertiaryFill else cellColor())
+            .border(1.dp, p.separator, shape)
+            .padding(14.dp),
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(accent.copy(alpha = if (faded) 0.10f else if (p.dark) 0.20f else 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!faded) Icon(Icons.Rounded.Android, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.weight(1f))
+        Box(Modifier.width(54.dp).height(7.dp).clip(CircleShape).background(p.separator))
+        Spacer(Modifier.height(6.dp))
+        Box(Modifier.width(34.dp).height(7.dp).clip(CircleShape).background(p.separator))
+    }
 }

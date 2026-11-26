@@ -1,5 +1,8 @@
 package com.shayor.apkextractor.ui.components
 
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import com.shayor.apkextractor.ui.theme.appColors
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ScrollState
@@ -107,7 +110,16 @@ fun Modifier.glassSource(): Modifier {
     val state = LocalGlassState.current
     val key = LocalGlassKey.current
     val bg = MaterialTheme.colorScheme.background
-    return (if (state != null) hazeSource(state, key = key) else this).background(bg)
+    val glow = appColors.glow
+    return (if (state != null) hazeSource(state, key = key) else this)
+        .background(bg)
+        // The app's canvas: a faint blue glow high up behind the content. One cached gradient,
+        // drawn with the background, so it costs nothing while scrolling.
+        .drawWithCache {
+            val radius = size.width * 0.95f
+            val brush = Brush.radialGradient(listOf(glow, Color.Transparent), Offset(size.width / 2f, 0f), radius)
+            onDrawBehind { drawRect(brush, size = androidx.compose.ui.geometry.Size(size.width, minOf(size.height, radius))) }
+        }
 }
 
 @Composable
@@ -117,7 +129,9 @@ private fun glassStyle(tint: Color): HazeStyle {
         HazeStyle(
             backgroundColor = p.groupedBackground,
             tints = listOf(HazeTint(tint)),
-            blurRadius = 26.dp,
+            // Light mode blurs less: behind white glass the rows are white too, and a heavy blur
+            // turns them into an even white, so the glass looks solid.
+            blurRadius = if (p.dark) 30.dp else 14.dp,
             noiseFactor = 0f,
             // No blur before Android 12: a near-opaque fill still reads as the same material.
             fallbackTint = HazeTint(tint.copy(alpha = 0.95f)),
@@ -145,8 +159,9 @@ fun Modifier.glass(shape: Shape, tint: Color = iosColors.glassTint, shadow: Bool
                     Shadow(
                         radius = 22.dp,
                         color = Color.Black,
-                        offset = DpOffset(0.dp, 6.dp),
-                        alpha = if (p.dark) 0.45f else 0.13f,
+                        offset = DpOffset(0.dp, if (p.dark) 6.dp else 8.dp),
+                        // In light mode the shadow, not a grey rim, sets the glass off the canvas.
+                        alpha = if (p.dark) 0.45f else 0.12f,
                     ),
                 )
             } else {
@@ -161,10 +176,10 @@ fun Modifier.glass(shape: Shape, tint: Color = iosColors.glassTint, shadow: Bool
                     if (key != null) canDrawArea = { it.key == key }
                 }
             } else {
-                Modifier.background(tint.copy(alpha = 0.97f))
+                Modifier.background(tint.copy(alpha = 1f))
             },
         )
-        .border(0.8.dp, rim, shape)
+        .border(1.dp, rim, shape)
 }
 
 // -------------------------------------------------------------------------------------------------

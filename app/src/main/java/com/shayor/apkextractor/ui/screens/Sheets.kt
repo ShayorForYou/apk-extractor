@@ -1,5 +1,8 @@
 package com.shayor.apkextractor.ui.screens
 
+import com.shayor.apkextractor.ui.components.ToastCenter
+import com.shayor.apkextractor.ui.components.ToastTone
+import androidx.compose.foundation.border
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -196,21 +199,21 @@ fun AppDetailsSheet(
             Modifier
                 .sheetScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 28.dp),
+                .padding(bottom = 20.dp),
         ) {
             // App Store–style header: big icon, name, version, and the main action under them.
-            Row(Modifier.padding(start = 4.dp, top = 6.dp), verticalAlignment = Alignment.Top) {
-                AppIcon(app.packageName, app.iconKey, 84.dp)
+            Row(Modifier.padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                AppIcon(app.packageName, app.iconKey, 64.dp)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(app.label, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(app.label, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
                         "${versionLabel(app).take(20)}  ·  ${rememberFileSize(app.sizeBytes)}",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = p.secondaryLabel,
                         maxLines = 1,
                     )
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(5.dp))
                     FormatTag(
                         packageFormat(app),
                         detail = if (app.isSplit) "${app.splitSourceDirs.size + 1} PARTS" else null,
@@ -219,21 +222,22 @@ fun AppDetailsSheet(
                 CloseButton(onDismiss)
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(14.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PrimaryButton(
                     if (app.isSplit && format == SplitMode.BUNDLE) "Extract APKS" else "Extract APK",
                     onClick = { onExtract(mode) },
                     icon = Icons.Rounded.Download,
                     modifier = Modifier.weight(1f),
+                    height = 46.dp,
                 )
                 Spacer(Modifier.width(10.dp))
-                ShareButton(app.isSplit, onShare = { chosen -> onShare(chosen ?: mode) }, size = 50.dp)
+                ShareButton(app.isSplit, onShare = { chosen -> onShare(chosen ?: mode) }, size = 46.dp)
             }
 
             // Like the action buttons on an iOS contact card.
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QuickAction(
                     "Open",
                     Icons.AutoMirrored.Rounded.OpenInNew,
@@ -262,7 +266,7 @@ fun AppDetailsSheet(
                 })
             }
 
-            SectionHeader("Backup")
+            SectionHeader("Backup", top = 18.dp)
             InsetGroup {
                 SwitchCell(
                     "Auto-Backup Updates",
@@ -271,14 +275,14 @@ fun AppDetailsSheet(
                     icon = { IconTile(Icons.Rounded.Autorenew, p.green) },
                     // Split apps: say which format, so the link with Save As above is plain to see.
                     subtitle = when {
-                        !app.isSplit -> "Save each new version to $saveLocation"
-                        format == SplitMode.BUNDLE -> "Save each new version as an APKS bundle to $saveLocation"
-                        else -> "Save each new version as a single APK to $saveLocation"
+                        !app.isSplit -> "Each new version, to $saveLocation"
+                        format == SplitMode.BUNDLE -> "Each new version as APKS, to $saveLocation"
+                        else -> "Each new version as one APK, to $saveLocation"
                     },
                 )
             }
 
-            SectionHeader("Information")
+            SectionHeader("Information", top = 18.dp)
             InsetGroup {
                 InfoRow("Package", app.packageName, onClick = { copyToClipboard(context, "Package name", app.packageName) }) {
                     Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = p.tertiaryLabel, modifier = Modifier.size(15.dp))
@@ -332,15 +336,16 @@ private fun QuickAction(
     Column(
         modifier
             .pressScale(source, 0.94f)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(cellColor())
+            .border(1.dp, iosColors.separator, RoundedCornerShape(14.dp))
             .clickable(source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
-            .padding(vertical = 11.dp),
+            .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.height(4.dp))
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(19.dp))
+        Spacer(Modifier.height(3.dp))
         Text(label, style = MaterialTheme.typography.labelMedium, color = accent, maxLines = 1)
     }
 }
@@ -356,14 +361,14 @@ private fun InfoRow(
 ) {
     val base = Modifier.fillMaxWidth()
     Row(
-        (if (onClick != null) base.clickable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 13.dp),
+        (if (onClick != null) base.clickable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.width(16.dp))
         Text(
             value,
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             color = iosColors.secondaryLabel,
             textAlign = TextAlign.End,
             maxLines = maxLines,
@@ -543,10 +548,14 @@ private fun safeStart(context: Context, intent: Intent) {
     try {
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (_: ActivityNotFoundException) {
-        Toast.makeText(context, "Can't open this", Toast.LENGTH_SHORT).show()
+        cantOpen(context)
     } catch (_: SecurityException) {
-        Toast.makeText(context, "Can't open this", Toast.LENGTH_SHORT).show()
+        cantOpen(context)
     }
+}
+
+private fun cantOpen(context: Context) {
+    if (!ToastCenter.show("Can't open this", ToastTone.Warning)) Toast.makeText(context, "Can't open this", Toast.LENGTH_SHORT).show()
 }
 
 private fun openStore(context: Context, pkg: String) {
@@ -562,5 +571,7 @@ private fun copyToClipboard(context: Context, label: String, text: String) {
     val cm = context.getSystemService(ClipboardManager::class.java) ?: return
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
     // Android 13+ shows its own confirmation.
-    if (Build.VERSION.SDK_INT < 33) Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+    if (Build.VERSION.SDK_INT < 33 && !ToastCenter.show("Copied", ToastTone.Success)) {
+        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+    }
 }

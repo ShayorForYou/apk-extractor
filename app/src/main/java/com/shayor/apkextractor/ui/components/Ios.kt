@@ -2,6 +2,20 @@ package com.shayor.apkextractor.ui.components
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.shayor.apkextractor.ui.theme.JakartaSans
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.shadow.Shadow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.material.icons.rounded.Android
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Layers
@@ -114,11 +128,11 @@ fun IosSwitch(
         label = "switch",
     )
     val stretch by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = 900f), label = "knob")
-    val offTrack = if (p.dark) Color(0xFF39393D) else Color(0xFFE9E9EA)
-    val on = p.green
+    val offTrack = if (p.dark) Color(0x2EFFFFFF) else Color(0x241C2433)
+    val on = MaterialTheme.colorScheme.primary
     Box(
         modifier
-            .size(51.dp, 31.dp)
+            .size(46.dp, 28.dp)
             .then(
                 if (onCheckedChange != null) {
                     Modifier.toggleable(
@@ -140,9 +154,9 @@ fun IosSwitch(
             .drawBehind {
                 val t = progress
                 drawRoundRect(lerp(offTrack, on, t), cornerRadius = CornerRadius(size.height / 2))
-                val pad = 2.dp.toPx()
+                val pad = 2.5.dp.toPx()
                 val d = size.height - 2 * pad
-                val w = d + 7.dp.toPx() * stretch
+                val w = d + 6.dp.toPx() * stretch
                 val x = pad + (size.width - 2 * pad - w) * t
                 drawRoundRect(
                     Color.Black.copy(alpha = 0.10f),
@@ -203,7 +217,7 @@ fun ActivityIndicator(
 // Inset grouped lists
 // -------------------------------------------------------------------------------------------------
 
-val GroupRadius = 24.dp
+val GroupRadius = 20.dp
 val GroupShape = RoundedCornerShape(GroupRadius)
 
 /** Row background: white / #1C1C1E, or one step lighter inside a sheet. */
@@ -225,24 +239,66 @@ fun InsetGroup(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
         modifier
             .fillMaxWidth()
             .clip(GroupShape)
-            .background(cellColor()),
+            .background(cellColor())
+            .border(1.dp, iosColors.separator, GroupShape),
         content = content,
     )
 }
 
+/**
+ * The hairline edge of a group drawn row by row (in a lazy list): the sides of every row, plus the
+ * rounded top of the first and bottom of the last, so the rows read as one outlined card.
+ */
+fun Modifier.groupEdge(first: Boolean, last: Boolean, color: Color, radius: Dp = GroupRadius): Modifier =
+    drawWithCache {
+        val stroke = 1.dp.toPx()
+        val h = stroke / 2
+        val r = radius.toPx().coerceAtMost(size.height / 2)
+        val k = (r - h) * 2
+        val w = size.width
+        val ht = size.height
+        val path = Path().apply {
+            if (first) moveTo(h, r) else moveTo(h, 0f)
+            lineTo(h, if (last) ht - r else ht)
+            if (last) {
+                arcTo(Rect(h, ht - h - k, h + k, ht - h), 180f, -90f, false)
+                lineTo(w - r, ht - h)
+                arcTo(Rect(w - h - k, ht - h - k, w - h, ht - h), 90f, -90f, false)
+            } else {
+                moveTo(w - h, ht)
+            }
+            lineTo(w - h, if (first) r else 0f)
+            if (first) {
+                arcTo(Rect(w - h - k, h, w - h, h + k), 0f, -90f, false)
+                lineTo(r, h)
+                arcTo(Rect(h, h, h + k, h + k), 270f, -90f, false)
+            }
+        }
+        val style = Stroke(stroke)
+        onDrawWithContent {
+            drawContent()
+            drawPath(path, color, style = style)
+        }
+    }
+
 /** Small uppercase caption above a group. */
 @Composable
-fun SectionHeader(text: String, modifier: Modifier = Modifier, trailing: (@Composable () -> Unit)? = null) {
+fun SectionHeader(
+    text: String,
+    modifier: Modifier = Modifier,
+    top: Dp = 26.dp,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     Row(
         modifier
             .fillMaxWidth()
-            .padding(start = 20.dp, end = 12.dp, top = 24.dp, bottom = 7.dp),
+            .padding(start = 6.dp, end = 4.dp, top = top, bottom = 8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
         Text(
             text.uppercase(),
-            style = MaterialTheme.typography.bodySmall,
-            color = iosColors.secondaryLabel,
+            style = SectionLabelStyle,
+            color = iosColors.tertiaryLabel,
             modifier = Modifier.weight(1f),
         )
         trailing?.invoke()
@@ -255,10 +311,19 @@ fun SectionFooter(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,
-        color = iosColors.secondaryLabel,
-        modifier = modifier.padding(start = 20.dp, end = 20.dp, top = 7.dp),
+        color = iosColors.tertiaryLabel,
+        modifier = modifier.padding(start = 6.dp, end = 6.dp, top = 8.dp),
     )
 }
+
+/** Section caption: small, semibold, widely tracked caps. */
+val SectionLabelStyle = TextStyle(
+    fontFamily = JakartaSans,
+    fontSize = 10.5.sp,
+    lineHeight = 14.sp,
+    fontWeight = FontWeight.SemiBold,
+    letterSpacing = 1.7.sp,
+)
 
 /** Hairline between rows, inset from the leading edge as on iOS. */
 @Composable
@@ -278,11 +343,11 @@ fun IconTile(icon: ImageVector, color: Color, modifier: Modifier = Modifier, siz
     Box(
         modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.24f))
-            .background(color),
+            .clip(RoundedCornerShape(size * 0.3f))
+            .background(color.copy(alpha = if (iosColors.dark) 0.18f else 0.12f)),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.62f))
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(size * 0.58f))
     }
 }
 
@@ -481,17 +546,22 @@ fun IosSheet(
     val bottomInset = WindowInsets.safeDrawing.getBottom(density)
     val maxHeight = with(density) {
         val room = windowHeight - topInset - bottomInset -
-            SheetTopGap.roundToPx() - GrabberHeight.roundToPx()
+            SheetTopGap.roundToPx() - GrabberHeight.roundToPx() - SheetInset.roundToPx()
         minOf(room, (windowHeight * 0.9f).toInt()).coerceAtLeast(0).toDp()
     }
+    val rim = remember(p) { Brush.verticalGradient(listOf(p.glassRimTop, p.glassRimBottom)) }
+    // Liquid Glass sheet: a panel that floats inset from the edges of the screen, rounded all round
+    // like the display's own corners, with light catching its rim. No live blur: the sheet sits
+    // over a scrim in its own window, so a solid material looks the same and costs nothing.
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
+        containerColor = Color.Transparent,
         contentColor = p.label,
-        shape = RoundedCornerShape(topStart = 34.dp, topEnd = 34.dp),
-        scrimColor = Color.Black.copy(alpha = if (p.dark) 0.55f else 0.28f),
-        dragHandle = { Grabber() },
+        tonalElevation = 0.dp,
+        shape = RectangleShape,
+        scrimColor = Color.Black.copy(alpha = if (p.dark) 0.5f else 0.22f),
+        dragHandle = null,
         // Bottom only: the sheet never reaches the status bar, and a top inset that depends on the
         // sheet's offset is what made it bounce.
         contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
@@ -499,10 +569,25 @@ fun IosSheet(
         CompositionLocalProvider(LocalCellColor provides p.elevatedCell) {
             Column(
                 Modifier
+                    .padding(horizontal = SheetInset)
+                    .padding(bottom = SheetInset)
+                    .fillMaxWidth()
+                    .dropShadow(
+                        SheetShape,
+                        Shadow(radius = 30.dp, color = Color.Black, offset = DpOffset(0.dp, 10.dp), alpha = if (p.dark) 0.5f else 0.16f),
+                    )
+                    .clip(SheetShape)
+                    .background(p.sheet)
+                    .border(0.8.dp, rim, SheetShape)
                     .heightIn(max = maxHeight)
                     .onSizeChanged { sheetHeights[sheetState]?.set(0, it.height.toFloat()) },
-                content = content,
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Grabber()
+                Column(Modifier.fillMaxWidth(), content = content)
+            }
+            // Toasts show above the sheet, not hidden behind it.
+            ToastLayer()
         }
     }
 }
@@ -510,6 +595,10 @@ fun IosSheet(
 /** Space left between the status bar and the tallest sheet, so the screen behind still shows. */
 private val SheetTopGap = 24.dp
 private val GrabberHeight = 15.dp
+
+/** Gap between a floating sheet and the screen edges, and its corner radius. */
+private val SheetInset = 8.dp
+private val SheetShape = RoundedCornerShape(32.dp)
 
 @Composable
 private fun Grabber() {
@@ -581,18 +670,20 @@ fun IosMenu(
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(22.dp),
-        containerColor = if (p.dark) Color(0xFF2C2C2E) else Color(0xFFF9F9FB),
-        shadowElevation = 18.dp,
-        border = BorderStroke(0.5.dp, p.separator),
+        // The app's card colour (one step up in dark mode, so it lifts off the list) with the
+        // hairline every card has.
+        shape = RoundedCornerShape(20.dp),
+        containerColor = if (p.dark) p.elevatedCell else p.cell,
+        shadowElevation = 14.dp,
+        border = BorderStroke(1.dp, p.separator),
         modifier = modifier.width(width),
     ) {
         if (title != null) {
             Text(
-                title,
-                style = MaterialTheme.typography.bodySmall,
-                color = p.secondaryLabel,
-                modifier = Modifier.padding(start = 18.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
+                title.uppercase(),
+                style = SectionLabelStyle,
+                color = p.tertiaryLabel,
+                modifier = Modifier.padding(start = 18.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
             )
         }
         content()
@@ -600,8 +691,8 @@ fun IosMenu(
             Text(
                 footer,
                 style = MaterialTheme.typography.bodySmall,
-                color = p.secondaryLabel,
-                modifier = Modifier.padding(start = 18.dp, end = 16.dp, top = 6.dp, bottom = 4.dp),
+                color = p.tertiaryLabel,
+                modifier = Modifier.padding(start = 18.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
             )
         }
     }
@@ -623,6 +714,13 @@ fun IosMenuItem(
     tint: Color = iosColors.label,
 ) {
     val p = iosColors
+    val accent = MaterialTheme.colorScheme.primary
+    // Icons stay quiet (muted) unless the row is the current choice or has its own colour.
+    val iconTint = when {
+        checked -> accent
+        tint == p.label -> p.tertiaryLabel
+        else -> tint
+    }
     if (divider) {
         Box(
             Modifier
@@ -642,7 +740,7 @@ fun IosMenuItem(
     ) {
         if (checkColumn) {
             Box(Modifier.width(30.dp)) {
-                if (checked) Icon(Icons.Rounded.Check, contentDescription = null, tint = p.label, modifier = Modifier.size(18.dp))
+                if (checked) Icon(Icons.Rounded.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
             }
         }
         Column(Modifier.weight(1f)) {
@@ -651,7 +749,7 @@ fun IosMenuItem(
         }
         if (icon != null) {
             Spacer(Modifier.width(10.dp))
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(19.dp))
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.shayor.apkextractor.ui
 
+import com.shayor.apkextractor.ui.components.ToastTone
 import android.Manifest
 import android.app.Application
 import android.content.BroadcastReceiver
@@ -149,13 +150,18 @@ sealed interface MoveState {
 data class SavedApp(val label: String, val packageName: String, val iconKey: String, val file: ExportedFile)
 
 sealed interface UiEvent {
-    data class Message(val text: String) : UiEvent
+    data class Message(val text: String, val tone: ToastTone = ToastTone.Info) : UiEvent
 
     /**
      * A message with an "Undo" action that runs [undo] if tapped before the snackbar goes away.
      * Otherwise [commit] runs once it has gone (timed out, replaced, or the app left).
      */
-    class Undoable(val text: String, val undo: () -> Unit, val commit: () -> Unit = {}) : UiEvent
+    class Undoable(
+        val text: String,
+        val tone: ToastTone,
+        val undo: () -> Unit,
+        val commit: () -> Unit = {},
+    ) : UiEvent
     data class Launch(val intent: Intent) : UiEvent
 
     /** Tries each intent in order until one starts; shows [failMessage] if none can. */
@@ -458,6 +464,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     allApps.value?.none { it.packageName == pkg } == true -> "It's saved again once the app is reinstalled"
                     else -> "Saving this version now, and every update from here on"
                 },
+                if (enabled) ToastTone.Success else ToastTone.Info,
             ),
         )
     }
@@ -493,7 +500,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ordered = listState.value.apps.filter { it.packageName in packages }
         val apps = (ordered + packages.mapNotNull { byPkg[it] }).distinctBy { it.packageName }
         if (apps.isEmpty()) {
-            _events.trySend(UiEvent.Message("App not found"))
+            _events.trySend(UiEvent.Message("App not found", ToastTone.Warning))
             return
         }
 
@@ -603,7 +610,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (failures.isNotEmpty()) {
                 val text = if (failures.size == 1) failures[0].second else "Couldn't share ${failures.size} apps"
-                _events.trySend(UiEvent.Message(text))
+                _events.trySend(UiEvent.Message(text, ToastTone.Warning))
             }
             return
         }
@@ -645,14 +652,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         Availability.FolderUnreachable -> {
-            _events.trySend(UiEvent.Message("Can't reach ${entry.location}. Check that the folder is still there."))
+            _events.trySend(UiEvent.Message("Can't reach ${entry.location}. Check that the folder is still there.", ToastTone.Warning))
             false
         }
     }
 
     private fun fileGone(entry: HistoryEntry) {
         historyRepo.remove(entry.id)
-        _events.trySend(UiEvent.Message("That file was moved or deleted"))
+        _events.trySend(UiEvent.Message("That file was moved or deleted", ToastTone.Warning))
     }
 
     /** Takes the missing files off History. Nothing is on disk to delete, and Undo brings them back. */
@@ -663,6 +670,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _events.trySend(
             UiEvent.Undoable(
                 if (gone.size == 1) "Removed 1 missing file" else "Removed ${gone.size} missing files",
+                ToastTone.Removed,
                 undo = {
                     historyRepo.restore(gone)
                     refreshHistory(force = true)
@@ -678,6 +686,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _events.trySend(
             UiEvent.Undoable(
                 "Deleted ${entry.label} ${versionLabelOf(entry.versionName)}",
+                ToastTone.Deleted,
                 undo = { historyRepo.restore(listOf(entry)) },
                 commit = { purge(listOf(entry)) },
             ),
@@ -697,6 +706,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     n == 1 -> "Deleted 1 file"
                     else -> "Deleted $n files"
                 },
+                if (deleteFiles) ToastTone.Deleted else ToastTone.Removed,
                 undo = { historyRepo.restore(removed) },
                 commit = { purge(removed) },
             ),
@@ -729,7 +739,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         try {
             app.contentResolver.takePersistableUriPermission(tree, flags)
         } catch (_: SecurityException) {
-            _events.trySend(UiEvent.Message("Can't use that folder. Pick another one."))
+            _events.trySend(UiEvent.Message("Can't use that folder. Pick another one.", ToastTone.Warning))
             return
         }
         val name = exporter.folderName(tree) ?: tree.lastPathSegment?.substringAfterLast(':') ?: "Selected folder"
@@ -756,7 +766,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!exporter.hasTreeAccess(Uri.parse(tree))) {
             clearOutputFolder()
             _events.trySend(
-                UiEvent.Message("Save folder reset to ${ApkExporter.DEFAULT_LOCATION}"),
+                UiEvent.Message("Save folder reset to ${ApkExporter.DEFAULT_LOCATION}", ToastTone.Success),
             )
         }
     }

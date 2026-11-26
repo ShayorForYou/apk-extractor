@@ -1,5 +1,10 @@
 package com.shayor.apkextractor.ui.screens
 
+import com.shayor.apkextractor.ui.components.GroupRadius
+import com.shayor.apkextractor.ui.components.SectionLabelStyle
+import com.shayor.apkextractor.ui.components.CloseButton
+import androidx.compose.ui.draw.drawWithCache
+import com.shayor.apkextractor.ui.components.groupEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.fadeIn
@@ -23,6 +28,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.rounded.CheckCircle
+import com.shayor.apkextractor.ui.components.ActivityIndicator
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -166,7 +174,11 @@ fun InstallScreen(
                 PickFileCard(onPickFile)
                 if (!canInstall) SectionFooter("Android asks you to allow installs from APK Extractor the first time.")
             }
-            if (backups.isNotEmpty()) {
+            if (backups.isEmpty()) {
+                item(key = "empty") {
+                    SectionFooter("Apps you back up show up here, ready to reinstall in a tap.")
+                }
+            } else {
                 item(key = "backups") { SectionHeader("Recent Backups") }
                 itemsIndexed(backups, key = { _, it -> it.id }) { i, entry ->
                     BackupRow(
@@ -189,77 +201,88 @@ fun InstallScreen(
 private const val MAX_BACKUPS = 10
 
 /**
- * The main call to action, as one polished iOS card: a glossy accent icon with a soft glow, a title,
- * a line of help and a capsule button; a hairline footer lists the formats it opens.
+ * The way in: a roomier card than the rows below it, lit by a faint accent glow from its corner
+ * (a static gradient, drawn once). The file glyph and a "Browse" pill share the top line; the
+ * title, what it does and the formats it opens read below. The whole card is the button and sinks
+ * a touch while pressed.
  */
 @Composable
 private fun PickFileCard(onPick: () -> Unit) {
     val p = iosColors
     val accent = MaterialTheme.colorScheme.primary
-    val gradient = remember(accent) {
-        Brush.verticalGradient(listOf(lerp(accent, Color.White, 0.22f), lerp(accent, Color.Black, 0.10f)))
-    }
-    val tile = RoundedCornerShape(18.dp)
+    val source = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(24.dp)
+    val glow = accent.copy(alpha = if (p.dark) 0.22f else 0.12f)
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(GroupShape)
-            .background(cellColor()),
+            .pressScale(source, pressed = 0.98f)
+            .clip(shape)
+            .background(cellColor())
+            .drawBehind {
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(glow, Color.Transparent),
+                        center = Offset(size.width, 0f),
+                        radius = size.width * 0.75f,
+                    ),
+                    radius = size.width * 0.75f,
+                    center = Offset(size.width, 0f),
+                )
+            }
+            .border(1.dp, p.separator, shape)
+            .clickable(source, indication = null, role = Role.Button, onClickLabel = "Choose a file", onClick = onPick)
+            .padding(20.dp),
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, top = 30.dp, bottom = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
-                    .size(68.dp)
-                    .dropShadow(tile, Shadow(radius = 16.dp, color = accent, offset = DpOffset(0.dp, 6.dp), alpha = 0.32f))
-                    .clip(tile)
-                    .background(gradient)
-                    .border(0.8.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.45f), Color.White.copy(alpha = 0.05f))), tile),
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(accent.copy(alpha = if (p.dark) 0.18f else 0.12f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.FileOpen, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
+                Icon(Icons.Rounded.FileOpen, contentDescription = null, tint = accent, modifier = Modifier.size(26.dp))
             }
-            Spacer(Modifier.height(18.dp))
-            Text("Install from a File", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.weight(1f))
             Text(
-                "Pick an app file from your phone.\nSplit apps are installed in one go.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = p.secondaryLabel,
-                textAlign = TextAlign.Center,
+                "Browse",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(accent)
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
             )
-            Spacer(Modifier.height(22.dp))
-            PrimaryButton("Choose File", onClick = onPick, icon = Icons.Rounded.FolderOpen, modifier = Modifier.fillMaxWidth())
         }
-        Box(Modifier.fillMaxWidth().height(0.5.dp).background(p.separator))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Supports", style = MaterialTheme.typography.bodySmall, color = p.secondaryLabel)
-            Spacer(Modifier.width(10.dp))
-            listOf("APK", "APKS", "XAPK", "APKM").forEachIndexed { i, f ->
-                if (i > 0) Spacer(Modifier.width(5.dp))
+        Spacer(Modifier.height(18.dp))
+        Text("Install from a file", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Pick an app file from anywhere on your phone.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = p.secondaryLabel,
+            maxLines = 2,
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (format in PickFormats) {
                 Text(
-                    f,
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp),
+                    format,
+                    style = SectionLabelStyle.copy(letterSpacing = 0.8.sp),
                     color = p.secondaryLabel,
+                    maxLines = 1,
                     modifier = Modifier
                         .clip(CircleShape)
                         .background(p.tertiaryFill)
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
                 )
             }
         }
     }
 }
+
+private val PickFormats = listOf("APK", "APKS", "XAPK", "APKM")
 
 /** A backup in an inset grouped list, with an App Store–style "Install" pill. */
 @Composable
@@ -273,6 +296,7 @@ private fun BackupRow(entry: HistoryEntry, first: Boolean, last: Boolean, onInst
             .fillMaxWidth()
             .clip(groupItemShape(first, last))
             .background(cellColor())
+            .groupEdge(first, last, iosColors.separator)
             .drawBehind {
                 if (!first) {
                     val x = 72.dp.toPx()
@@ -280,10 +304,10 @@ private fun BackupRow(entry: HistoryEntry, first: Boolean, last: Boolean, onInst
                 }
             }
             .clickable(onClick = onInstall)
-            .padding(start = 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp),
+            .padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppIcon(entry.packageName, "${entry.packageName}@history", 42.dp)
+        AppIcon(entry.packageName, "${entry.packageName}@history", 42.dp, backupUri = entry.uri)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -292,15 +316,21 @@ private fun BackupRow(entry: HistoryEntry, first: Boolean, last: Boolean, onInst
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                listOfNotNull(versionLabel(entry.versionName).take(14), fileSize.takeIf { entry.sizeBytes > 0 }).joinToString("  ·  "),
-                style = MaterialTheme.typography.bodySmall,
-                color = p.secondaryLabel,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Spacer(Modifier.height(2.dp))
+            // One quiet line of facts; the format tag only for bundles, the less common case.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(relativeTime(entry.time), style = MaterialTheme.typography.labelMedium, color = p.tertiaryLabel, maxLines = 1)
+                Text(
+                    listOfNotNull(
+                        versionLabel(entry.versionName).take(14),
+                        fileSize.takeIf { entry.sizeBytes > 0 },
+                        relativeTime(entry.time),
+                    ).joinToString("  ·  "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = p.secondaryLabel,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
                 if (bundle != null) {
                     Spacer(Modifier.width(6.dp))
                     FormatTag(bundle)
@@ -311,10 +341,10 @@ private fun BackupRow(entry: HistoryEntry, first: Boolean, last: Boolean, onInst
         PillButton("Install", onClick = onInstall)
     }
 }
-
 // -------------------------------------------------------------------------------------------------
-// Install sheet — one fixed layout from "reading" to "open": icon, name, a status line and one
-// button. Only the words change and the button itself fills up as progress, so nothing jumps.
+// Install sheet — one compact card: the app in a header row, two quiet lines of facts, and the
+// actions. Every slot keeps its height in every state, so the sheet never resizes (a resize during
+// its slide-in made it stop and jump); progress is a ring drawn round the icon.
 // -------------------------------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -326,42 +356,17 @@ fun InstallSheet(state: InstallState, canInstall: Boolean, vm: InstallViewModel,
     )
     IosSheet(onDismiss = { if (!busy) vm.dismiss() }, sheetState = sheetState) {
         val ui = describe(state, canInstall, vm, onPickFile)
-        // The same height in every state, so the sheet never resizes (a resize during its slide-in
-        // made it stop and jump): the header and the card are each one fixed-height row.
         Column(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .padding(top = 2.dp, bottom = 12.dp),
+                .padding(top = 8.dp, bottom = 16.dp),
         ) {
-            SheetHeader(state, ui.title, ui.subtitle)
+            AppHeader(state, ui.title, ui.subtitle, onClose = if (busy) null else vm::dismiss)
             Spacer(Modifier.height(18.dp))
-            DetailCard(ui.detail)
-            Spacer(Modifier.height(16.dp))
-            MorphButton(ui.button, ui.onClick, ui.progress, ui.busy)
-            Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
-                val footer = ui.footer
-                if (footer != null) {
-                    Text(
-                        footer.first,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(role = Role.Button, onClick = footer.second)
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-                    )
-                } else if (ui.caption != null) {
-                    Text(
-                        ui.caption,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            InfoLines(ui.detail, ui.caption)
+            Spacer(Modifier.height(20.dp))
+            Actions(ui)
         }
     }
 }
@@ -510,75 +515,79 @@ private fun describe(state: InstallState, canInstall: Boolean, vm: InstallViewMo
                     pkg.label, pkg.packageName,
                     warn(state.message),
                     "Try again", vm::retry,
-                    footer = "Close" to vm::dismiss,
                 )
             } else {
                 SheetUi(
                     "Couldn't read this file", "Make sure it's an APK or APK bundle",
                     warn(state.message),
                     "Choose another file", { vm.dismiss(); onPickFile() },
-                    footer = "Close" to vm::dismiss,
                 )
             }
         }
     }
 }
 
-/** Icon beside the name and package, like the header of an iOS install sheet. */
+/** Icon, name and package in one row, with a round close button while it can be closed. */
 @Composable
-private fun SheetHeader(state: InstallState, title: String?, subtitle: String?) {
+private fun AppHeader(state: InstallState, title: String?, subtitle: String?, onClose: (() -> Unit)?) {
     val p = iosColors
-    val titleStyle = MaterialTheme.typography.titleLarge.copy(color = p.label, fontWeight = FontWeight.SemiBold)
+    val titleStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp, lineHeight = 22.sp, color = p.label)
     val subtitleStyle = MaterialTheme.typography.bodySmall
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         SheetIcon(state)
         Spacer(Modifier.width(14.dp))
-        // Reserves one title line and one package line, so the placeholder and text match.
-        ReserveHeight(
-            reserve = {
-                Column {
-                    Text("", style = titleStyle, maxLines = 1)
-                    Spacer(Modifier.height(2.dp))
-                    Text("", style = subtitleStyle, maxLines = 1)
-                }
-            },
-        ) {
-            AnimatedContent(
-                title to subtitle,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                contentAlignment = Alignment.CenterStart,
-                label = "title",
-                modifier = Modifier.fillMaxSize(),
-            ) { (t, sub) ->
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-                    if (t == null) {
-                        Placeholder(width = 150.dp, height = 18.dp)
-                        Spacer(Modifier.height(8.dp))
-                        Placeholder(width = 104.dp, height = 12.dp)
-                    } else {
-                        FitText(t, titleStyle, minSize = 15.sp)
-                        // An app without a name is titled by its package: don't repeat it.
-                        if (sub != null && sub != t) {
+        Box(Modifier.weight(1f)) {
+            // Reserves one title line and one package line, so the placeholder and the text match.
+            ReserveHeight(
+                reserve = {
+                    Column {
+                        Text("", style = titleStyle, maxLines = 1)
                         Spacer(Modifier.height(2.dp))
-                        Text(
-                            sub,
-                            style = subtitleStyle,
-                            color = p.secondaryLabel,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Text("", style = subtitleStyle, maxLines = 1)
+                    }
+                },
+            ) {
+                AnimatedContent(
+                    title to subtitle,
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    contentAlignment = Alignment.CenterStart,
+                    label = "title",
+                    modifier = Modifier.fillMaxSize(),
+                ) { (t, sub) ->
+                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+                        if (t == null) {
+                            Placeholder(width = 140.dp, height = 16.dp)
+                            Spacer(Modifier.height(8.dp))
+                            Placeholder(width = 100.dp, height = 10.dp)
+                        } else {
+                            FitText(t, titleStyle, minSize = 14.sp)
+                            // An app without a name is titled by its package: don't repeat it.
+                            if (sub != null && sub != t) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(sub, style = subtitleStyle, color = p.tertiaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
             }
         }
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.size(30.dp)) {
+            androidx.compose.animation.AnimatedVisibility(onClose != null, enter = fadeIn(), exit = fadeOut()) {
+                CloseButton(onClick = { onClose?.invoke() })
+            }
+        }
     }
 }
 
-/** App icon, with a small badge for the final state. */
+/**
+ * App icon with a thin accent ring round it while installing (a gliding arc while the length is
+ * unknown), and a check badge once installed. The ring is drawn, never laid out.
+ */
 @Composable
 private fun SheetIcon(state: InstallState) {
-    val colors = MaterialTheme.colorScheme
+    val p = iosColors
+    val accent = MaterialTheme.colorScheme.primary
     val pkg = when (state) {
         is InstallState.Ready -> state.pkg
         is InstallState.Installing -> state.pkg
@@ -586,42 +595,80 @@ private fun SheetIcon(state: InstallState) {
         is InstallState.Failed -> state.pkg
         else -> null
     }
-    val shape = RoundedCornerShape(15.dp)
-    Box(Modifier.size(IconSize)) {
-        val icon = pkg?.icon
-        when {
-            icon != null -> Image(icon, contentDescription = null, modifier = Modifier.fillMaxSize())
-            state is InstallState.Failed -> Box(
-                Modifier.fillMaxSize().clip(shape).background(colors.errorContainer),
-                contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.onErrorContainer, modifier = Modifier.size(26.dp)) }
-            pkg != null -> Box(
-                Modifier.fillMaxSize().clip(shape).background(colors.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.Android, contentDescription = null, modifier = Modifier.size(26.dp)) }
-            else -> Placeholder(IconSize, IconSize, shape)
+    val installing = state as? InstallState.Installing
+    val active = installing != null && !installing.waitingForUser
+    val ringAlpha by androidx.compose.animation.core.animateFloatAsState(if (active) 1f else 0f, label = "ring")
+    val sweep by androidx.compose.animation.core.animateFloatAsState(installing?.progress ?: 0f, label = "sweep")
+    // Spins only while the step's length is unknown.
+    val spin = if (active && installing?.progress == null) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "spin").animateFloat(
+            0f,
+            360f,
+            androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(1100, easing = androidx.compose.animation.core.LinearEasing),
+            ),
+            label = "spinAngle",
+        )
+    } else {
+        null
+    }
+    val track = p.tertiaryFill
+    val shape = RoundedCornerShape(IconSize * 0.26f)
+    Box(
+        Modifier
+            .size(IconBox)
+            .drawBehind {
+                if (ringAlpha <= 0f) return@drawBehind
+                val stroke = 2.5.dp.toPx()
+                val inset = stroke / 2
+                val arcSize = Size(size.width - stroke, size.height - stroke)
+                val topLeft = Offset(inset, inset)
+                drawArc(track, 0f, 360f, false, topLeft, arcSize, alpha = ringAlpha, style = Stroke(stroke))
+                if (spin != null) {
+                    drawArc(accent, spin.value - 90f, 90f, false, topLeft, arcSize, alpha = ringAlpha, style = Stroke(stroke, cap = StrokeCap.Round))
+                } else {
+                    drawArc(accent, -90f, 360f * sweep, false, topLeft, arcSize, alpha = ringAlpha, style = Stroke(stroke, cap = StrokeCap.Round))
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(IconSize)) {
+            val icon = pkg?.icon
+            when {
+                icon != null -> Image(icon, contentDescription = null, modifier = Modifier.fillMaxSize())
+                state is InstallState.Failed -> Box(
+                    Modifier.fillMaxSize().clip(shape).background(p.tertiaryFill),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = p.secondaryLabel, modifier = Modifier.size(24.dp)) }
+                pkg != null -> Box(
+                    Modifier.fillMaxSize().clip(shape).background(p.tertiaryFill),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.Android, contentDescription = null, tint = p.secondaryLabel, modifier = Modifier.size(24.dp)) }
+                else -> Placeholder(IconSize, IconSize, shape)
+            }
         }
         androidx.compose.animation.AnimatedVisibility(
             visible = state is InstallState.Done,
-            enter = androidx.compose.animation.scaleIn() + fadeIn(),
+            enter = androidx.compose.animation.scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 500f)) + fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 0.dp),
+            modifier = Modifier.align(Alignment.BottomEnd),
         ) {
             Box(
                 Modifier
                     .size(22.dp)
                     .clip(CircleShape)
-                    .background(iosColors.sheet)
+                    .background(p.sheet)
                     .padding(2.5.dp)
                     .clip(CircleShape)
-                    .background(iosColors.green),
+                    .background(p.green),
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp)) }
         }
     }
 }
 
-private val IconSize = 56.dp
+private val IconSize = 48.dp
+private val IconBox = 58.dp
 
 /**
  * Lays out [reserve] invisibly to take its size, and draws [content] over it. The area is then
@@ -636,86 +683,120 @@ private fun ReserveHeight(reserve: @Composable () -> Unit, content: @Composable 
 }
 
 /**
- * The one card in the middle of the sheet, the same size in every state: an app's facts, how it
- * compares with the installed version, or a status line.
+ * Two lines under the header: the facts (tags, or installed → new) or a status, then a quiet hint.
+ * A status with no hint may take both lines.
  */
 @Composable
-private fun DetailCard(detail: Detail) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(GroupShape)
-            .background(cellColor()),
+private fun InfoLines(detail: Detail, caption: String?) {
+    ReserveHeight(
+        reserve = {
+            Column {
+                Box(Modifier.height(TagHeight))
+                Spacer(Modifier.height(6.dp))
+                Text("", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            }
+        },
     ) {
-        // An invisible row of facts gives the card its height (a label and a value, at any font size).
-        Row(Modifier.alpha(0f).clearAndSetSemantics {}.padding(vertical = 12.dp)) { Fact("A", "1") }
         AnimatedContent(
-            detail,
+            detail to (caption ?: defaultHint(detail)),
             transitionSpec = { fadeIn() togetherWith fadeOut() },
-            contentAlignment = Alignment.Center,
-            label = "detail",
-            modifier = Modifier.matchParentSize(),
-        ) { d ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            contentAlignment = Alignment.CenterStart,
+            label = "info",
+            modifier = Modifier.fillMaxSize(),
+        ) { (d, cap) ->
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
                 when (d) {
-                    is Detail.Status -> StatusLine(d.text, d.tone)
-                    is Detail.Facts -> FactsRow(d.pkg)
+                    is Detail.Status -> StatusLine(d.text, d.tone, maxLines = if (cap == null) 2 else 1)
+                    is Detail.Facts -> FactTags(d.pkg)
                     is Detail.Compare -> VersionCompare(d.pkg)
+                }
+                if (cap != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(cap, style = MaterialTheme.typography.bodySmall, color = iosColors.tertiaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
     }
 }
 
-/** A new app at a glance, like the facts row on an App Store page: version, size, Android. */
-@Composable
-private fun FactsRow(pkg: PackageToInstall) {
-    FactCells {
-        // The version gets the most room: some are long ("26.43.30 (260400-1006944126)").
-        Fact("Version", versionLabel(pkg.versionName), Modifier.weight(1.5f))
-        FactDivider()
-        Fact("Size", rememberFileSize(pkg.totalBytes), Modifier.weight(1f))
-        FactDivider()
-        Fact("Requires", "Android ${androidName(pkg.minSdk)}+", Modifier.weight(1f))
+private val TagHeight = 26.dp
+
+/** A quiet line for states that have no hint of their own, so the two lines always read as a pair. */
+private fun defaultHint(detail: Detail): String? = when (detail) {
+    is Detail.Facts -> "New on this phone"
+    is Detail.Compare -> when {
+        detail.pkg.versionCode == detail.pkg.installedVersionCode -> "Replaces the installed copy, keeps its data"
+        detail.pkg.versionCode > (detail.pkg.installedVersionCode ?: 0) -> "Your data stays as it is"
+        else -> null
+    }
+    is Detail.Status -> when {
+        detail.text.startsWith("Waiting") -> "Approve it in the system prompt"
+        else -> null
     }
 }
 
+/** A small capsule of fact: grey, or tinted with [tint]. */
 @Composable
-private fun FactCells(content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-        verticalAlignment = Alignment.CenterVertically,
-        content = content,
-    )
+private fun Tag(text: String, modifier: Modifier = Modifier, tint: Color? = null) {
+    val p = iosColors
+    Box(
+        modifier
+            .height(TagHeight)
+            .clip(CircleShape)
+            .background(tint?.copy(alpha = if (p.dark) 0.16f else 0.10f) ?: p.tertiaryFill)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium, color = tint ?: p.secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
+/** A new app: version, size and the Android it needs, as tags. */
 @Composable
-private fun Fact(label: String, value: String, modifier: Modifier = Modifier) =
-    Fact(label, AnnotatedString(value), modifier)
+private fun FactTags(pkg: PackageToInstall) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        // The version gets whatever room is left: some are long ("26.43.30 (260400-1006944126)").
+        Tag(versionLabel(pkg.versionName), Modifier.weight(1f, fill = false))
+        Tag(rememberFileSize(pkg.totalBytes))
+        Tag("Android ${androidName(pkg.minSdk)}+")
+    }
+}
 
+/**
+ * Already installed: "installed → new" where only the part of the new version that differs is
+ * tinted (accent for an update, orange for an older one), and a tag naming the change. The same
+ * version shows once.
+ */
 @Composable
-private fun Fact(
-    label: String,
-    value: AnnotatedString,
-    modifier: Modifier = Modifier,
-    labelColor: Color = Color.Unspecified,
-) {
+private fun VersionCompare(pkg: PackageToInstall) {
     val p = iosColors
-    Column(
-        modifier
-            .padding(horizontal = 8.dp)
-            .semantics(mergeDescendants = true) {},
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = labelColor.takeOrElse { p.secondaryLabel },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(2.dp))
-        FitText(value, MaterialTheme.typography.titleSmall.copy(color = p.label, textAlign = TextAlign.Center))
+    val installedCode = pkg.installedVersionCode ?: return
+    val fromName = versionLabel(pkg.installedVersionName.orEmpty().ifBlank { installedCode.toString() })
+    val toName = versionLabel(pkg.versionName)
+    val size = rememberFileSize(pkg.totalBytes)
+    if (pkg.versionCode == installedCode) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Tag(toName, Modifier.weight(1f, fill = false))
+            Tag("Installed", tint = p.green)
+            Tag(size)
+        }
+        return
+    }
+    val newer = pkg.versionCode > installedCode
+    val tint = if (newer) MaterialTheme.colorScheme.primary else p.orange
+    val split = changedFrom(fromName, toName)
+    val versions = buildAnnotatedString {
+        withStyle(SpanStyle(color = p.tertiaryLabel)) { append(fromName) }
+        withStyle(SpanStyle(color = p.tertiaryLabel)) { append("  →  ") }
+        append(toName.take(split))
+        withStyle(SpanStyle(color = tint)) { append(toName.drop(split)) }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FitText(versions, MaterialTheme.typography.titleSmall.copy(color = p.label), Modifier.weight(1f, fill = false), minSize = 11.sp)
+        Spacer(Modifier.width(10.dp))
+        Tag(changeCaption(fromName, toName, newer), tint = tint)
+        Spacer(Modifier.width(6.dp))
+        Tag(size)
     }
 }
 
@@ -739,56 +820,6 @@ private fun FitText(
         overflow = TextOverflow.Ellipsis, // only if even the smallest size isn't enough
         autoSize = TextAutoSize.StepBased(minFontSize = minSize, maxFontSize = style.fontSize, stepSize = 0.5.sp),
     )
-}
-
-@Composable
-private fun FactDivider() {
-    Box(
-        Modifier
-            .fillMaxHeight(0.7f)
-            .width(0.5.dp)
-            .background(iosColors.separator),
-    )
-}
-
-/**
- * Already installed: the installed version and this file's, side by side in the card. The label
- * over the new one names the change ("Minor update"), and only the part of the version that differs
- * is tinted (accent for an update, orange for an older version). The same version shows once.
- */
-@Composable
-private fun VersionCompare(pkg: PackageToInstall) {
-    val p = iosColors
-    val installedCode = pkg.installedVersionCode ?: return
-    val fromName = versionLabel(pkg.installedVersionName.orEmpty().ifBlank { installedCode.toString() })
-    val toName = versionLabel(pkg.versionName)
-    if (pkg.versionCode == installedCode) {
-        FactCells {
-            Fact("Version", toName, Modifier.weight(1.5f))
-            FactDivider()
-            Fact("Size", rememberFileSize(pkg.totalBytes), Modifier.weight(1f))
-            FactDivider()
-            Fact("Installed", "Same", Modifier.weight(1f))
-        }
-        return
-    }
-    val newer = pkg.versionCode > installedCode
-    val tint = if (newer) MaterialTheme.colorScheme.primary else p.orange
-    val split = changedFrom(fromName, toName)
-    val to = buildAnnotatedString {
-        append(toName.take(split))
-        withStyle(SpanStyle(color = tint)) { append(toName.drop(split)) }
-    }
-    FactCells {
-        Fact("Installed", buildAnnotatedString { withStyle(SpanStyle(color = p.secondaryLabel)) { append(fromName) } }, Modifier.weight(1f))
-        Icon(
-            Icons.AutoMirrored.Rounded.ArrowForward,
-            contentDescription = "to",
-            tint = tint,
-            modifier = Modifier.size(16.dp),
-        )
-        Fact(changeCaption(fromName, toName, newer), to, Modifier.weight(1f), labelColor = tint)
-    }
 }
 
 /** Where [to] starts to differ from [from], moved back to the start of that number. */
@@ -820,71 +851,69 @@ private fun changeCaption(from: String, to: String, newer: Boolean): String {
     }
 }
 
-/** A status inside the card: a coloured dot beside one or two lines of text. */
+/** A status line: a small symbol (or a spinner while waiting) and the text in its colour. */
 @Composable
-private fun StatusLine(text: String, tone: Tone) {
+private fun StatusLine(text: String, tone: Tone, maxLines: Int) {
     val colors = MaterialTheme.colorScheme
     val p = iosColors
-    val (dot, fg) = when (tone) {
-        Tone.Neutral -> p.gray to p.secondaryLabel
-        Tone.Accent -> colors.primary to p.label
-        Tone.Success -> p.green to p.green
-        Tone.Warning -> p.orange to p.orange
+    val fg = when (tone) {
+        Tone.Neutral -> p.secondaryLabel
+        Tone.Accent -> colors.primary
+        Tone.Success -> p.green
+        Tone.Warning -> p.orange
     }
-    val style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium)
-    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(dot))
-        Spacer(Modifier.width(9.dp))
+    Row(Modifier.semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+        when (tone) {
+            Tone.Neutral -> ActivityIndicator(size = 15.dp)
+            Tone.Success -> Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = fg, modifier = Modifier.size(17.dp))
+            Tone.Warning -> Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = fg, modifier = Modifier.size(17.dp))
+            Tone.Accent -> Unit
+        }
+        if (tone != Tone.Accent) Spacer(Modifier.width(8.dp))
         Text(
             text,
-            style = style,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
             color = fg,
-            maxLines = 2,
+            maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
+/** The main action, with a quieter second one (Cancel / Done) beside it when there is one. */
+@Composable
+private fun Actions(ui: SheetUi) {
+    Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically) {
+        val footer = ui.footer
+        if (footer != null) {
+            QuietButton(footer.first, footer.second, Modifier.weight(0.6f))
+            Spacer(Modifier.width(10.dp))
+        }
+        MainButton(ui.button, ui.onClick, ui.busy, Modifier.weight(1f))
+    }
+}
+
 /**
- * The single action. While busy it becomes its own progress bar: a soft track that fills with the
- * accent (or a gliding band when the length of the step is unknown).
+ * The accent capsule. While busy it turns into a soft accent tint with the accent label; the ring
+ * round the icon shows the progress.
  */
 @Composable
-private fun MorphButton(label: String, onClick: (() -> Unit)?, progress: Float?, busy: Boolean) {
+private fun MainButton(label: String, onClick: (() -> Unit)?, busy: Boolean, modifier: Modifier) {
     val colors = MaterialTheme.colorScheme
+    val p = iosColors
     val source = remember { MutableInteractionSource() }
     val container by androidx.compose.animation.animateColorAsState(
-        if (busy) colors.primaryContainer else colors.primary, label = "btnBg",
+        if (busy) colors.primary.copy(alpha = if (p.dark) 0.16f else 0.10f) else colors.primary, label = "btnBg",
     )
     val content by androidx.compose.animation.animateColorAsState(
-        if (busy) colors.onPrimaryContainer else colors.onPrimary, label = "btnFg",
+        if (busy) colors.primary else colors.onPrimary, label = "btnFg",
     )
-    val fill by androidx.compose.animation.core.animateFloatAsState(progress ?: 0f, label = "fill")
-    val sweep = androidx.compose.animation.core.rememberInfiniteTransition(label = "sweep")
-    val band by sweep.animateFloat(
-        initialValue = -0.4f,
-        targetValue = 1f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            androidx.compose.animation.core.tween(1100, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-        ),
-        label = "band",
-    )
-    val bandColor = colors.primary.copy(alpha = 0.22f)
     Box(
-        Modifier
-            .fillMaxWidth()
-            .height(50.dp)
+        modifier
+            .fillMaxHeight()
             .pressScale(source)
             .clip(CircleShape)
-            .background(container)
-            .drawBehind {
-                if (!busy) return@drawBehind
-                if (progress != null) {
-                    drawRect(bandColor, size = Size(size.width * fill, size.height))
-                } else {
-                    drawRect(bandColor, topLeft = Offset(size.width * band, 0f), size = Size(size.width * 0.4f, size.height))
-                }
-            }
+            .drawBehind { drawRect(container) }
             .then(
                 if (onClick != null) {
                     Modifier.clickable(source, indication = null, role = Role.Button, onClick = onClick)
@@ -895,8 +924,26 @@ private fun MorphButton(label: String, onClick: (() -> Unit)?, progress: Float?,
         contentAlignment = Alignment.Center,
     ) {
         AnimatedContent(label, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "btnText") { text ->
-            Text(text, style = MaterialTheme.typography.titleMedium, color = content, maxLines = 1)
+            Text(text, style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp), color = content, maxLines = 1)
         }
+    }
+}
+
+@Composable
+private fun QuietButton(label: String, onClick: () -> Unit, modifier: Modifier) {
+    val p = iosColors
+    val source = remember { MutableInteractionSource() }
+    Box(
+        modifier
+            .fillMaxHeight()
+            .pressScale(source)
+            .clip(CircleShape)
+            .background(p.tertiaryFill)
+            .border(1.dp, p.separator, CircleShape)
+            .clickable(source, indication = null, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp), color = p.label, maxLines = 1)
     }
 }
 
